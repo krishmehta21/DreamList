@@ -62,13 +62,30 @@ def validate_price_entry(
                 return False, reason, source
 
         source_lower = source.lower()
+        path = parsed.path
         
         # 1. Normalize based on hostname ending
         if hostname.endswith("amazon.in") or hostname.endswith("amazon.com") or hostname.endswith("media-amazon.com"):
+            path_lower = path.lower()
+            is_amazon_product = (
+                "/dp/" in path_lower or 
+                "/gp/product/" in path_lower or 
+                "/gp/aw/d/" in path_lower
+            )
+            if not is_amazon_product:
+                reason = f"Amazon URL does not contain product detail path (e.g. /dp/): {url}"
+                logger.warning(f"Rejected price entry for host {hostname}: {reason}")
+                return False, reason, "amazon"
+                
             logger.info(f"Accepted price entry: {hostname} normalized to 'amazon'")
             return True, "", "amazon"
             
         if hostname.endswith("flipkart.com"):
+            if "/p/" not in path.lower():
+                reason = f"Flipkart URL does not contain product detail path /p/: {url}"
+                logger.warning(f"Rejected price entry for host {hostname}: {reason}")
+                return False, reason, "flipkart"
+                
             logger.info(f"Accepted price entry: {hostname} normalized to 'flipkart'")
             return True, "", "flipkart"
             
@@ -198,7 +215,8 @@ def run_research(item_name: str, manual_link: Optional[str] = None) -> dict:
         "2. All product prices must be in Indian Rupees (INR). If you only find USD/foreign currency prices, convert them to INR using a 1 USD = 83 INR conversion rate.\n"
         "3. Only include an 'official' source if you can locate the brand's actual domain (e.g. apple.com or logitech.com). Do NOT return reseller domains, marketplace profiles, or generic retail stores as 'official'.\n"
         "4. If a clean, trusted price match cannot be identified, OMIT that source entry entirely from your output. Do NOT substitute low-quality or untrusted domains.\n"
-        "5. Force all Amazon links to point to amazon.in instead of amazon.com.\n\n"
+        "5. Force all Amazon links to point to amazon.in instead of amazon.com.\n"
+        "6. Direct Product Pages Only: You MUST only return links that point directly to a product page. Do NOT return search result pages or category list pages under any circumstances. If you only find a search result page, OMIT that price entry. Amazon links must contain '/dp/' or '/gp/product/' followed by a 10-character ASIN (e.g., https://www.amazon.in/dp/B084Z6T721). Flipkart links must contain '/p/' followed by the product ID (e.g., https://www.flipkart.com/item/p/itm5a3b97b102808).\n\n"
         "For generic queries (e.g. 'OLED monitor' or 'gaming mouse'), select a specific, popular, highly-rated product recommendation (e.g. 'Logitech G502 X') and research that specific model. In your 'best_price.reasoning' field, note that you selected this specific model because the input name was generic.\n\n"
         "IMPORTANT: You must return a SINGLE, STRICT JSON object. Do not include any introductory or concluding text, explanations, or prose outside the JSON. The response must parse perfectly as JSON with this exact structure:\n"
         "{\n"

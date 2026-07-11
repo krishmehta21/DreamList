@@ -100,6 +100,37 @@ export default function ItemDetailScreen() {
     }
   }, [item]);
 
+  // Check if price comparison is stale (last checked >= 14 days ago)
+  const isStale = useMemo(() => {
+    if (!item || !item.research || item.research.length === 0) return false;
+    const researchRow = item.research[0];
+    if (!researchRow.researched_at) return false;
+    try {
+      const researchDate = new Date(researchRow.researched_at);
+      const now = new Date();
+      const diffTime = Math.abs(now.getTime() - researchDate.getTime());
+      const diffDays = diffTime / (1000 * 60 * 60 * 24);
+      return diffDays >= 14;
+    } catch {
+      return false;
+    }
+  }, [item]);
+
+  // Calculate exact days since last research
+  const daysSinceResearch = useMemo(() => {
+    if (!item || !item.research || item.research.length === 0) return 0;
+    const researchRow = item.research[0];
+    if (!researchRow.researched_at) return 0;
+    try {
+      const researchDate = new Date(researchRow.researched_at);
+      const now = new Date();
+      const diffTime = Math.abs(now.getTime() - researchDate.getTime());
+      return Math.floor(diffTime / (1000 * 60 * 60 * 24));
+    } catch {
+      return 0;
+    }
+  }, [item]);
+
   const toggleEditMode = () => {
     if (!item) return;
     if (!isEditing) {
@@ -836,6 +867,24 @@ export default function ItemDetailScreen() {
 
           {/* Price Comparison */}
           <Text style={styles.sectionHeader}>PRICE COMPARISON</Text>
+          {isStale && item.status !== 'pending' && item.status !== 'researching' && (
+            <View style={styles.staleBanner}>
+              <View style={styles.staleBannerLeft}>
+                <Text style={styles.staleBannerText}>
+                  ⚠️ Prices may be outdated (last checked {daysSinceResearch} days ago).
+                </Text>
+              </View>
+              <Pressable
+                style={styles.staleRefreshButton}
+                onPress={handleRetryResearch}
+                disabled={retrying}
+              >
+                <Text style={styles.staleRefreshButtonText}>
+                  {retrying ? 'REFRESHING...' : 'REFRESH'}
+                </Text>
+              </Pressable>
+            </View>
+          )}
           {item.status === 'pending' || item.status === 'researching' ? (
             <View style={styles.placeholderBox}>
               <Text style={styles.placeholderText}>
@@ -1632,5 +1681,38 @@ const styles = StyleSheet.create({
     fontFamily: DLFonts.mono,
     fontSize: 10,
     fontWeight: 'bold',
+  },
+  staleBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: 'rgba(217, 119, 6, 0.08)',
+    borderColor: 'rgba(217, 119, 6, 0.3)',
+    borderWidth: 1,
+    borderRadius: 8,
+    padding: 12,
+    marginBottom: 12,
+  },
+  staleBannerLeft: {
+    flex: 1,
+    marginRight: 12,
+  },
+  staleBannerText: {
+    color: '#D97706',
+    fontSize: 12,
+    fontFamily: DLFonts.sans,
+    lineHeight: 16,
+  },
+  staleRefreshButton: {
+    backgroundColor: '#D97706',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 4,
+  },
+  staleRefreshButtonText: {
+    color: '#000000',
+    fontSize: 11,
+    fontWeight: 'bold',
+    fontFamily: DLFonts.medium,
   },
 });
