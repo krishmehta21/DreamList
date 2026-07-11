@@ -1,0 +1,29 @@
+{
+  "cli": {
+    "version": ">= 9.0.0"
+  },
+  "build": {
+    "development": {
+      "developmentClient": true,
+      "distribution": "internal"
+    },
+    "preview": {
+      "distribution": "internal",
+      "env": {
+        "EXPO_PUBLIC_API_URL": "https://dreamlist-backend-krish.onrender.com",
+        "EXPO_PUBLIC_SUPABASE_URL": "https://updldhzjuuxctkhehjjl.supabase.co",
+        "EXPO_PUBLIC_SUPABASE_ANON_KEY": "sb_publishable_9fzwBtv6qmyPAXNQ4tOVCQ_uZ_CXlwi"
+      }
+    },
+    "production": {
+      "env": {
+        "EXPO_PUBLIC_API_URL": "https://dreamlist-backend-krish.onrender.com",
+        "EXPO_PUBLIC_SUPABASE_URL": "https://updldhzjuuxctkhehjjl.supabase.co",
+        "EXPO_PUBLIC_SUPABASE_ANON_KEY": "sb_publishable_9fzwBtv6qmyPAXNQ4tOVCQ_uZ_CXlwi"
+      }
+    }
+  },
+  "submit": {
+    "production": {}
+  }
+}
