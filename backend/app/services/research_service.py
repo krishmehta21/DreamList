@@ -11,6 +11,21 @@ from app.core.config import get_settings
 logger = logging.getLogger(__name__)
 settings = get_settings()
 
+def extract_name_from_url(url: str) -> str:
+    try:
+        parsed = urlparse(url)
+        path = parsed.path
+        parts = [p for p in path.split('/') if p]
+        for part in parts:
+            if '-' in part or '_' in part:
+                name = part.replace('-', ' ').replace('_', ' ')
+                return name.strip().title()
+        if parts:
+            return parts[-1].replace('-', ' ').replace('_', ' ').strip().title()
+    except Exception:
+        pass
+    return "this product"
+
 def validate_price_entry(
     source: str, 
     url: str, 
@@ -243,7 +258,11 @@ def run_research(item_name: str, manual_link: Optional[str] = None) -> dict:
         logger.info(f"Triggering Gemini research for manual link: '{manual_link}' (item: '{item_name}', placeholder: {is_placeholder_name})...")
         page_content = fetch_url_content(manual_link)
         
-        fallback_query = "this product" if is_placeholder_name else f"'{item_name}'"
+        if is_placeholder_name:
+            extracted_name = extract_name_from_url(manual_link)
+            fallback_query = f"'{extracted_name}'"
+        else:
+            fallback_query = f"'{item_name}'"
         
         if page_content:
             logger.info("Successfully fetched manual link content to feed to Gemini.")
