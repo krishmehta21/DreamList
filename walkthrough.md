@@ -84,4 +84,10 @@ We tested scrolling performance under realistic and extreme loads (20 items and 
 * Supports multi-selection: tapping one or more categories filters the transaction log below to show only relevant entries.
 * Interactive visual states: unselected category capsules automatically fade (`opacity: 0.35`) when a filter is active, and tapping selected capsules removes the filter.
 
+---
 
+## 8. Cloud Backend Deployment & Mobile App EAS Build
+* **Monorepo Structuring**: Restructured the project repository to track both `app/` (React Native Expo) and `backend/` (FastAPI Python) under a single root Git directory.
+* **FastAPI Cloud Deployment (Render)**: Deployed the Python AI Research FastAPI backend to Render (`https://dreamlist-backend-krish.onrender.com`), binding the Supabase databases and Gemini AI secrets securely.
+* **EAS Build Configuration (`eas.json`)**: Configured EAS build profiles to automatically bake the live Render backend API URL, Supabase URL, and anon keys into the client mobile JavaScript bundle.
+* **EAS Compilation (Android APK)**: Linked and compiled a standalone Android preview APK via `@krishmehta21/app` builds, outputting an installable APK distribution link.
