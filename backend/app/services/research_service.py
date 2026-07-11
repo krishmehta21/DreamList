@@ -233,9 +233,18 @@ def run_research(item_name: str, manual_link: Optional[str] = None) -> dict:
         "}"
     )
 
+    is_placeholder_name = (item_name or "").lower().strip() in [
+        "researching name...", "researching name", 
+        "researching details...", "researching details",
+        "pending"
+    ]
+
     if manual_link:
-        logger.info(f"Triggering Gemini research for manual link: '{manual_link}' (item: '{item_name}')...")
+        logger.info(f"Triggering Gemini research for manual link: '{manual_link}' (item: '{item_name}', placeholder: {is_placeholder_name})...")
         page_content = fetch_url_content(manual_link)
+        
+        fallback_query = "this product" if is_placeholder_name else f"'{item_name}'"
+        
         if page_content:
             logger.info("Successfully fetched manual link content to feed to Gemini.")
             user_input = (
@@ -245,14 +254,14 @@ def run_research(item_name: str, manual_link: Optional[str] = None) -> dict:
                 f"1. Extract the primary product title/name and return it in the 'product_name' field.\n"
                 f"2. Extract the price, specifications, brand, model, and availability *specifically* from this page content.\n"
                 f"3. In the 'prices' list, you MUST include a price entry for this source (the manual link '{manual_link}') as one of the entries, using the correct price found on the page.\n"
-                f"4. If the page content does not contain enough specifications or details, use Google Search grounding as a fallback to search for specs and details of '{item_name}'."
+                f"4. If the page content does not contain enough specifications or details, use Google Search grounding as a fallback to search for specs and details of {fallback_query}."
             )
         else:
             logger.warning("Could not fetch page content directly. Falling back to search grounding with link query.")
             user_input = (
                 f"Research details, specs, and live price offers (in INR) for the product at this link: '{manual_link}'.\n"
                 f"Extract the product name/title from the page and return it in the 'product_name' field.\n"
-                f"If the link is unreachable, fallback to searching for specs and details of '{item_name}' via Google Search grounding."
+                f"If the link is unreachable, fallback to searching for specs and details of {fallback_query} via Google Search grounding."
             )
     else:
         logger.info(f"Triggering Gemini research for item: '{item_name}' with Google Search grounding...")

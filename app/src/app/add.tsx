@@ -99,11 +99,24 @@ function SelectionPill({ label, active, onPress, emoji, activeBgColor, activeTex
 export default function AddItemScreen() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
-  const params = useLocalSearchParams<{ category?: string }>();
+  const params = useLocalSearchParams<{ category?: string; sharedUrl?: string; sharedText?: string }>();
   const { user } = useAuth();
 
-  const [name, setName] = useState('');
-  const [link, setLink] = useState('');
+  const [name, setName] = useState(() => {
+    if (params.sharedUrl) {
+      return 'Researching details...';
+    }
+    if (params.sharedText) {
+      return params.sharedText;
+    }
+    return '';
+  });
+  const [link, setLink] = useState(() => {
+    if (params.sharedUrl) {
+      return params.sharedUrl;
+    }
+    return '';
+  });
   const [category, setCategory] = useState<Category>(() => {
     // Capitalize parameter to match categories keys
     const rawCat = params.category || 'Tech';

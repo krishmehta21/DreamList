@@ -112,9 +112,25 @@ def run_background_research(item_id: str, item_name: str, user_id: str):
         # 2. Run Gemini research
         research_data = run_research(item_name, manual_link=manual_link)
         
-        # If user has a manual link and Gemini extracted a product name, update name in DB
+        # If user has a manual link or the name is a placeholder, and Gemini resolved a name, update it in DB
         extracted_name = research_data.get("product_name")
-        if extracted_name and str(extracted_name).strip() and manual_link:
+        if not extracted_name or not str(extracted_name).strip():
+            brand_val = research_data.get("brand")
+            model_val = research_data.get("model")
+            if brand_val and model_val:
+                extracted_name = f"{brand_val} {model_val}"
+            elif model_val:
+                extracted_name = model_val
+            elif brand_val:
+                extracted_name = brand_val
+                
+        is_placeholder_name = (item_name or "").lower().strip() in [
+            "researching name...", "researching name", 
+            "researching details...", "researching details",
+            "pending"
+        ]
+        
+        if extracted_name and str(extracted_name).strip() and (manual_link or is_placeholder_name):
             service_client.table("wishlist_items") \
                 .update({"name": str(extracted_name).strip()}) \
                 .eq("id", item_id) \
