@@ -168,6 +168,7 @@ def run_background_research(item_id: str, item_name: str, user_id: str):
         from app.services.research_service import validate_price_entry
         prices_list = research_data.get("prices", [])
         brand = research_data.get("brand")
+        inserted_prices_count = 0
         for p in prices_list:
             url = p.get("url", "")
             src = str(p.get("source", "other")).lower()
@@ -189,6 +190,11 @@ def run_background_research(item_id: str, item_name: str, user_id: str):
                 "in_stock": bool(p.get("in_stock", True))
             }
             service_client.table("item_prices").insert(price_row).execute()
+            inserted_prices_count += 1
+            
+        # If the user shared a direct link, but we failed to validate any price entries, fail the research run.
+        if manual_link and inserted_prices_count == 0:
+            raise ValueError(f"No valid price entries could be extracted/validated from the shared link: {manual_link}")
             
         # 6. Mark status as ready
         service_client.table("wishlist_items") \
