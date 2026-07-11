@@ -1,56 +1,75 @@
-# Welcome to your Expo app 👋
+# DreamList - Personal Wishlist Tracker
 
-This is an [Expo](https://expo.dev) project created with [`create-expo-app`](https://www.npmjs.com/package/create-expo-app).
+DreamList is a personal-first AI-powered wishlist tracker app. You add an item by name, and an AI background research process gathers details, specs, and price offers from Amazon, Flipkart, and official sites to display them in a clean dashboard.
 
-## Get started
+This repository is structured as a monorepo containing:
+- `/app` - Expo mobile client application (TypeScript + Expo Router)
+- `/backend` - FastAPI Python web server
+- `/supabase` - Database migrations for Postgres schema
 
-1. Install dependencies
+---
 
+## Getting Started
+
+### 1. Supabase Project Setup
+1. Create a project at [supabase.com](https://supabase.com) or run a local instance.
+2. Link your local directory or run the SQL initial migration found in:
+   `supabase/migrations/20260630000000_init_schema.sql`
+   You can apply it directly via the Supabase Dashboard SQL Editor, or use the Supabase CLI:
    ```bash
-   npm install
+   supabase db push
    ```
 
-2. Start the app
-
+### 2. Backend Setup (FastAPI)
+1. Navigate to the `backend` directory:
    ```bash
+   cd backend
+   ```
+2. Create and activate a Python virtual environment:
+   ```bash
+   python -m venv venv
+   # On Windows:
+   venv\Scripts\activate
+   # On macOS/Linux:
+   source venv/bin/activate
+   ```
+3. Install the dependencies:
+   ```bash
+   pip install -r requirements.txt
+   ```
+4. Configure your environment variables:
+   Copy `.env.example` to `.env` and fill in your Supabase credentials:
+   ```bash
+   copy .env.example .env
+   ```
+5. Run the development server:
+   ```bash
+   uvicorn app.main:app --reload --port 8000
+   ```
+6. Check that the backend is working by visiting:
+   [http://localhost:8000/health](http://localhost:8000/health)
+
+### 3. Frontend Setup (Expo)
+1. Navigate to the `app` directory:
+   ```bash
+   cd app
+   ```
+2. Configure your environment variables:
+   Copy `.env.example` to `.env`:
+   ```bash
+   copy .env.example .env
+   ```
+3. Run the development server (Metro bundler):
+   ```bash
+   npm run dev
+   # or
    npx expo start
    ```
+4. Press `w` to open in the browser (web mode), or open it via the Expo Go app on iOS/Android.
 
-In the output, you'll find options to open the app in a
+---
 
-- [development build](https://docs.expo.dev/develop/development-builds/introduction/)
-- [Android emulator](https://docs.expo.dev/workflow/android-studio-emulator/)
-- [iOS simulator](https://docs.expo.dev/workflow/ios-simulator/)
-- [Expo Go](https://expo.dev/go), a limited sandbox for trying out app development with Expo
-
-You can start developing by editing the files inside the **app** directory. This project uses [file-based routing](https://docs.expo.dev/router/introduction).
-
-## Get a fresh project
-
-When you're ready, run:
-
-```bash
-npm run reset-project
-```
-
-This command will move the starter code to the **app-example** directory and create a blank **app** directory where you can start developing.
-
-### Other setup steps
-
-- To set up ESLint for linting, run `npx expo lint`, or follow our guide on ["Using ESLint and Prettier"](https://docs.expo.dev/guides/using-eslint/)
-- If you'd like to set up unit testing, follow our guide on ["Unit Testing with Jest"](https://docs.expo.dev/develop/unit-testing/)
-- Learn more about the TypeScript setup in this template in our guide on ["Using TypeScript"](https://docs.expo.dev/guides/typescript/)
-
-## Learn more
-
-To learn more about developing your project with Expo, look at the following resources:
-
-- [Expo documentation](https://docs.expo.dev/): Learn fundamentals, or go into advanced topics with our [guides](https://docs.expo.dev/guides).
-- [Learn Expo tutorial](https://docs.expo.dev/tutorial/introduction/): Follow a step-by-step tutorial where you'll create a project that runs on Android, iOS, and the web.
-
-## Join the community
-
-Join our community of developers creating universal apps.
-
-- [Expo on GitHub](https://github.com/expo/expo): View our open source platform and contribute.
-- [Discord community](https://chat.expo.dev): Chat with Expo users and ask questions.
+## Technology Stack Summary
+- **Frontend**: React Native, Expo, TypeScript, Expo Router (file-based navigation).
+- **Backend**: FastAPI (Python), Uvicorn.
+- **Database**: PostgreSQL (Supabase) + Row-level security (RLS).
