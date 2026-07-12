@@ -351,7 +351,7 @@ def _call_gemini_api(item_name: str, manual_link: Optional[str] = None) -> dict:
         logger.info(f"Triggering Gemini research for item: '{item_name}' with Google Search grounding...")
         user_input = f"Research details, specs, and live price offers (in INR) for this item: '{item_name}'. Only include trusted domains."
     
-    target_model = "gemini-3.1-flash-lite"
+    target_model = "gemini-2.5-flash"
     try:
         print(f"[{threading.current_thread().name}] >>> OUTGOING API PAYLOAD MODEL: '{target_model}' at {time.strftime('%H:%M:%S', time.localtime())}.{int(time.time() * 1000) % 1000:03d}", flush=True)
         interaction = client.interactions.create(
