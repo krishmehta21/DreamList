@@ -235,6 +235,24 @@ def run_research(item_name: str, manual_link: Optional[str] = None) -> dict:
                 
             print(f"[{threading.current_thread().name}] Initiating Gemini call for '{item_name}' at {time.strftime('%H:%M:%S', time.localtime())}...", flush=True)
             result = _run_research_internal_with_retry(item_name, manual_link)
+            
+            # Apply server-side validate_price_entry domain filter to the prices list before returning
+            if "prices" in result and isinstance(result["prices"], list):
+                valid_prices = []
+                brand = result.get("brand")
+                for p in result["prices"]:
+                    url = p.get("url", "")
+                    src = str(p.get("source", "other")).lower()
+                    is_valid, reject_reason, normalized_source = validate_price_entry(
+                        src, url, brand=brand, item_name=item_name, manual_link=manual_link
+                    )
+                    if is_valid:
+                        p["source"] = normalized_source
+                        valid_prices.append(p)
+                    else:
+                        logger.warning(f"run_research: Price entry REJECTED ({src} -> {url}): {reject_reason}")
+                result["prices"] = valid_prices
+                
             return result
         finally:
             last_request_time[0] = time.time()
