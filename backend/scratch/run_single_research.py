@@ -9,7 +9,7 @@ sys.path.append(r"c:\Users\21meh\OneDrive\Desktop\DreamList\backend")
 
 from app.services.research_service import run_research
 
-print("Running a single end-to-end research query for 'Keychron V1 Keyboard' using gemini-2.5-flash...")
+print("Running a single end-to-end research query for 'Keychron V1 Keyboard' using gemini-3.1-flash-lite...")
 try:
     res = run_research("Keychron V1 Keyboard")
     print("\nSUCCESS! Research result:")

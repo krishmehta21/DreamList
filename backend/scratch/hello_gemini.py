@@ -25,9 +25,9 @@ def main():
     try:
         client = genai.Client(api_key=api_key)
         
-        print("Creating grounding interaction using gemini-2.5-flash...")
+        print(f"Creating grounding interaction using {settings.GEMINI_MODEL}...")
         interaction = client.interactions.create(
-            model="gemini-2.5-flash",
+            model=settings.GEMINI_MODEL,
             input="Latest price of Keychron V1 keyboard in India on Amazon or Flipkart",
             tools=[{"type": "google_search"}]
         )
