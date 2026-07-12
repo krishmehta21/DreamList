@@ -91,3 +91,39 @@ We tested scrolling performance under realistic and extreme loads (20 items and 
 * **FastAPI Cloud Deployment (Render)**: Deployed the Python AI Research FastAPI backend to Render (`https://dreamlist-backend-krish.onrender.com`), binding the Supabase databases and Gemini AI secrets securely.
 * **EAS Build Configuration (`eas.json`)**: Configured EAS build profiles to automatically bake the live Render backend API URL, Supabase URL, and anon keys into the client mobile JavaScript bundle.
 * **EAS Compilation (Android APK)**: Linked and compiled a standalone Android preview APK via `@krishmehta21/app` builds, outputting an installable APK distribution link.
+
+---
+
+## 9. Price Comparison Link Validation & Refresh
+* **URL Path-Shape Validation**: Enforced strict path checks inside `validate_price_entry` (`research_service.py`):
+  * **Amazon**: Host ends with `amazon.in` or `amazon.com` (forced to `.in`) AND path contains `/dp/`, `/gp/product/`, or `/gp/aw/d/`.
+  * **Flipkart**: Host ends with `flipkart.com` AND path contains `/p/`.
+  * Any search/listing/category results URLs are rejected on validation.
+* **Prompt Hardening**: Instructed Gemini in `run_research` to strictly return direct product page links or omit the price entry entirely.
+* **Stale Prices Warning Banner**:
+  * Added a `useMemo` hook in `[id].tsx` checking if prices are older than 14 days.
+  * Rendered an Amber stale prices banner (`⚠️ Prices may be outdated (last checked N days ago)`) directly under the PRICE COMPARISON section header.
+  * Provided a **REFRESH** button triggering `handleRetryResearch` to pull fresh prices.
+* **Database Cleanup**: Re-triggered research on the broken mirror item, replacing the dead Amazon 404 URL with a live, verified Gharaana.in product link.
+
+---
+
+## 10. Native Share Sheet Integration (iOS & Android)
+* **Native Packages**: Configured `"expo-share-intent": "~5.0.0"` and `"expo-linking": "~8.0.12"` for Expo SDK 54 compatibility.
+* **Native Configuration**:
+  * Android: Added native Intent Filters to capture text/plain and URL intents.
+  * iOS: Configured explicit `iosActivationRules` in `app.json` supporting `NSExtensionActivationSupportsWebURLWithMaxCount` and `NSExtensionActivationSupportsText`.
+* **Root Share Listener**:
+  * Embedded `useShareIntent` inside the `AuthGate` component (`_layout.tsx`).
+  * Extracted URLs from shared payloads using `/(https?:\/\/[^\s]+)/gi` regex.
+  * Redirects authenticated users instantly to the `/add` screen (passing the URL/text parameter) and resets the share buffer.
+* **Add Item Pre-filling Flow**:
+  * If a URL is shared: Pre-fills the name field with `"Researching details..."` and the link field with the shared URL.
+  * If text is shared (no URL): Pre-fills the name field with the text.
+  * Cancelling routes back safely without leaving orphaned drafts.
+* **Background Research & Placeholder Resolution**:
+  * Creating a wishlist item triggers the background research task using the shared `manual_link`.
+  * Gemini falls back to the URL-slug-extracted product name for search grounding if the direct crawl is blocked.
+  * Successfully validated prices are inserted, and the item's database name is updated from the placeholder to the AI-resolved product title.
+  * **Failure Handling**: Verified that dead/inaccessible shared URLs fail research gracefully, setting the item's status to `failed` and preserving the raw URL as `manual_link` with the retry button enabled.
+
