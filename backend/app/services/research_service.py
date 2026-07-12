@@ -352,9 +352,9 @@ def _call_gemini_api(item_name: str, manual_link: Optional[str] = None) -> dict:
         user_input = f"Research details, specs, and live price offers (in INR) for this item: '{item_name}'. Only include trusted domains."
     
     try:
-        print(f"[{threading.current_thread().name}] >>> Outgoing Gemini API call started at {time.strftime('%H:%M:%S', time.localtime())}.{int(time.time() * 1000) % 1000:03d} (Model: gemini-2.5-flash-lite)", flush=True)
+        print(f"[{threading.current_thread().name}] >>> Outgoing Gemini API call started at {time.strftime('%H:%M:%S', time.localtime())}.{int(time.time() * 1000) % 1000:03d} (Model: gemini-3.1-flash-lite)", flush=True)
         interaction = client.interactions.create(
-            model="gemini-2.5-flash-lite",
+            model="gemini-3.1-flash-lite",
             system_instruction=system_prompt,
             input=user_input,
             tools=[{"type": "google_search"}]
