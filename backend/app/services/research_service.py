@@ -1,6 +1,9 @@
 import json
 import logging
 import re
+import threading
+import time
+import random
 from urllib.parse import urlparse
 import urllib.request
 import urllib.error
@@ -10,6 +13,11 @@ from app.core.config import get_settings
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
+
+# Thread-safe rate limit queue pacing variables
+gemini_thread_lock = threading.Lock()
+last_request_time = [0.0]
+REQUEST_SPACING = 7.5  # Spacing in seconds (safely under 10 RPM limit)
 
 def extract_name_from_url(url: str) -> str:
     try:
@@ -214,7 +222,64 @@ def run_research(item_name: str, manual_link: Optional[str] = None) -> dict:
     """
     Runs research on an item using Gemini and Google Search grounding.
     Returns a validated dictionary of results.
+    Paces requests using a thread lock to respect the RPM limit.
     """
+    with gemini_thread_lock:
+        try:
+            now = time.time()
+            elapsed = now - last_request_time[0]
+            if elapsed < REQUEST_SPACING:
+                sleep_time = REQUEST_SPACING - elapsed
+                print(f"[{threading.current_thread().name}] Pacing Queue: sleeping {sleep_time:.2f}s (last request was {elapsed:.2f}s ago at {time.strftime('%H:%M:%S', time.localtime(last_request_time[0]))})", flush=True)
+                time.sleep(sleep_time)
+                
+            print(f"[{threading.current_thread().name}] Initiating Gemini call for '{item_name}' at {time.strftime('%H:%M:%S', time.localtime())}...", flush=True)
+            result = _run_research_internal_with_retry(item_name, manual_link)
+            return result
+        finally:
+            last_request_time[0] = time.time()
+
+def _run_research_internal_with_retry(item_name: str, manual_link: Optional[str] = None) -> dict:
+    from google.genai import errors
+    max_attempts = 4
+    base_backoff = 2.0
+    
+    for attempt in range(1, max_attempts + 1):
+        try:
+            return _call_gemini_api(item_name, manual_link)
+        except Exception as e:
+            err_code = getattr(e, "code", None)
+            err_msg = str(e).lower()
+            details_str = str(getattr(e, "details", "")).lower()
+            combined_err = f"{err_msg} {details_str}"
+            
+            # Check if this is a 429 rate limit
+            is_429 = (err_code == 429) or ("429" in err_msg) or ("resource_exhausted" in err_msg) or ("too_many_requests" in err_msg)
+            
+            if is_429:
+                # Differentiate RPD (Daily) from RPM/TPM (Minute)
+                is_rpd = "per_day" in combined_err or "daily" in combined_err or "requests_per_day" in combined_err or "rpd" in combined_err
+                
+                if is_rpd:
+                    logger.error(f"Daily request limit (RPD) reached. Failing fast: {str(e)} Details: {getattr(e, 'details', None)}")
+                    raise ValueError("Daily research limit reached — try again after midnight Pacific time")
+                    
+                if attempt == max_attempts:
+                    logger.error(f"Max research retry attempts ({max_attempts}) reached. Failing: {str(e)}")
+                    raise e
+                    
+                sleep_duration = (base_backoff ** attempt) + random.uniform(0.5, 1.5)
+                logger.warning(
+                    f"Gemini API rate limited (Attempt {attempt}/{max_attempts}). "
+                    f"Retrying in {sleep_duration:.2f} seconds... Error: {str(e)}"
+                )
+                time.sleep(sleep_duration)
+            else:
+                # Other non-rate-limit errors: fail immediately
+                logger.error(f"Non-retryable error during Gemini call: {str(e)}")
+                raise e
+
+def _call_gemini_api(item_name: str, manual_link: Optional[str] = None) -> dict:
     if not settings.GEMINI_API_KEY:
         raise ValueError("GEMINI_API_KEY is not configured in the backend environment.")
 
@@ -287,9 +352,9 @@ def run_research(item_name: str, manual_link: Optional[str] = None) -> dict:
         user_input = f"Research details, specs, and live price offers (in INR) for this item: '{item_name}'. Only include trusted domains."
     
     try:
-        # Use interactions.create per the v2.x guidelines!
+        print(f"[{threading.current_thread().name}] >>> Outgoing Gemini API call started at {time.strftime('%H:%M:%S', time.localtime())}.{int(time.time() * 1000) % 1000:03d} (Model: gemini-2.5-flash-lite)", flush=True)
         interaction = client.interactions.create(
-            model="gemini-2.5-flash",
+            model="gemini-2.5-flash-lite",
             system_instruction=system_prompt,
             input=user_input,
             tools=[{"type": "google_search"}]
