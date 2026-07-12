@@ -130,10 +130,13 @@ We tested scrolling performance under realistic and extreme loads (20 items and 
 ---
 
 ## 11. Model Migration & Request Pacing Queue (10 RPM Pacing)
-* **Model Consolidation**: Consolidated all Gemini API calls to `gemini-2.5-flash-lite` across the codebase (including `research_service.py` and `hello_gemini.py`), resolving inconsistencies.
+* **Model Consolidation**: Consolidated all Gemini API calls to the stable **`gemini-2.5-flash`** model across the codebase (including `research_service.py` and `hello_gemini.py`). This is the only active model that supports Google Search Grounding on this project/key, whereas `gemini-3.1-flash-lite` returned persistent 429 quota errors due to lack of grounding tool enablement/quota for that model tier.
 * **Thread-Safe Rate Limiter**:
   * Implemented a `threading.Lock` pacing mechanism (`run_research` in `research_service.py`) that strictly enforces at least `7.5 seconds` spacing between consecutive Gemini calls.
   * Solved a critical pacing bypass bug by wrapping the rate-limiting block in a `try-finally` block. This guarantees `last_request_time` is updated even when requests fail (e.g. 404/network errors), preserving request pacing across all threads under all conditions.
+* **Integrate Server-Side Price Validation**:
+  * Integrated the `validate_price_entry` domain filter directly inside the service layer (`run_research` in `research_service.py`). 
+  * This guarantees that all price results (including ones returned by standalone tools like `run_single_research.py` or asynchronous worker runners) are automatically filtered. Any unvalidated third-party domains (e.g., Ubuy, Credkeys) are automatically rejected and dropped from the returned price array.
 * **Transient Quota Retries & Fail-Fast**:
   * Retries transient RPM/TPM rate limits (429 errors) up to 4 attempts with exponential backoff (`(2.0 ** attempt)`) and random jitter (`+ random.uniform(0.5, 1.5)`).
   * Automatically inspects the error response body (`e.details` and `e.message`) for RPD (Daily requests) keywords (`per_day`, `daily`, `rpd`). If daily quota exhaustion is detected, it fails fast immediately, raising `"Daily research limit reached — try again after midnight Pacific time"` without burning useless retries.
@@ -141,5 +144,6 @@ We tested scrolling performance under realistic and extreme loads (20 items and 
   * Added timing log prints showing millisecond-precision wall-clock timestamps for every outgoing call.
   * Verified that concurrent threads are completely serialized and paced one by one, with clear `8-10 seconds` gaps between consecutive outgoing Gemini calls.
   * Verified the RPD fail-fast logic via a unit test (`test_rpd_fail_fast.py`) mocking a structured daily quota error.
+
 
 

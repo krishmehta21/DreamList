@@ -253,6 +253,42 @@ def run_research(item_name: str, manual_link: Optional[str] = None) -> dict:
                         logger.warning(f"run_research: Price entry REJECTED ({src} -> {url}): {reject_reason}")
                 result["prices"] = valid_prices
                 
+                # Re-derive best_price based on the validated prices array
+                best_price_obj = result.get("best_price")
+                if not valid_prices:
+                    result["best_price"] = None
+                elif isinstance(best_price_obj, dict):
+                    best_url = best_price_obj.get("url")
+                    best_source = best_price_obj.get("source")
+                    
+                    matching_entry = None
+                    if best_url:
+                        matching_entry = next((vp for vp in valid_prices if vp.get("url") == best_url), None)
+                    if not matching_entry and best_source:
+                        matching_entry = next((vp for vp in valid_prices if vp.get("source") == best_source), None)
+                        
+                    if matching_entry:
+                        best_price_obj["source"] = matching_entry["source"]
+                        best_price_obj["price"] = matching_entry["price"]
+                        if "url" in matching_entry:
+                            best_price_obj["url"] = matching_entry["url"]
+                    else:
+                        cheapest = min(valid_prices, key=lambda x: x.get("price", float('inf')))
+                        result["best_price"] = {
+                            "source": cheapest["source"],
+                            "price": cheapest["price"],
+                            "url": cheapest.get("url"),
+                            "reasoning": f"Lowest price found among validated sources ({cheapest['source']})."
+                        }
+                else:
+                    cheapest = min(valid_prices, key=lambda x: x.get("price", float('inf')))
+                    result["best_price"] = {
+                        "source": cheapest["source"],
+                        "price": cheapest["price"],
+                        "url": cheapest.get("url"),
+                        "reasoning": f"Lowest price found among validated sources ({cheapest['source']})."
+                    }
+                
             return result
         finally:
             last_request_time[0] = time.time()
