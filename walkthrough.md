@@ -145,5 +145,24 @@ We tested scrolling performance under realistic and extreme loads (20 items and 
   * Verified that concurrent threads are completely serialized and paced one by one, with clear `8-10 seconds` gaps between consecutive outgoing Gemini calls.
   * Verified the RPD fail-fast logic via a unit test (`test_rpd_fail_fast.py`) mocking a structured daily quota error.
 
+---
+
+## 12. Bug Fixes (Stuck Research & Web Bundling Crashes)
+
+### Bug 1: Stuck Research Self-Healing & Polling
+* **Root Cause**: Temporary optimistic items created in the local SQLite cache with a `temp-` ID would get stuck in the `"pending"` (Researching details...) skeleton state indefinitely if the remote `createItem` API call failed, hung, or was interrupted (e.g. app process killed by OS, or Render backend spin-down). Since the `temp-` items do not exist on Supabase, the backend's `check_and_clean_timeouts` task never saw them to mark them as failed.
+* **Fix (Client self-healing)**:
+  * Implemented `cleanOrphanedTempItems()` inside [database.native.ts](file:///c:/Users/21meh/OneDrive/Desktop/DreamList/app/src/lib/database.native.ts) and [database.web.ts](file:///c:/Users/21meh/OneDrive/Desktop/DreamList/app/src/lib/database.web.ts). This automatically purges any cached items with a `temp-` ID that are older than 2 minutes.
+  * Called `cleanOrphanedTempItems()` inside the dashboard's `useFocusEffect` (in [index.tsx](file:///c:/Users/21meh/OneDrive/Desktop/DreamList/app/src/app/(tabs)/index.tsx)) and on the details page (in [[id].tsx](file:///c:/Users/21meh/OneDrive/Desktop/DreamList/app/src/app/items/[id].tsx)) to automatically self-heal stale temp items on focus.
+  * Added a **10-second polling interval** in [[id].tsx](file:///c:/Users/21meh/OneDrive/Desktop/DreamList/app/src/app/items/[id].tsx) that regularly refetches item details *only* while the status is `'pending'` or `'researching'`. Every fetch call invokes the backend's `check_and_clean_timeouts` check, forcing the item to transition to the `"failed"` status (rendering the retry banner) on the server and client within 2 minutes if the background research task is killed.
+
+### Bug 2: expo-sqlite Web Bundling Crash
+* **Root Cause**: `expo-sqlite` imports native resources and a web assembly asset (`wa-sqlite.wasm`) that Metro cannot resolve during web bundling, crashing the web bundler entirely.
+* **Fix (Platform-specific split)**:
+  * Renamed `database.ts` to [database.native.ts](file:///c:/Users/21meh/OneDrive/Desktop/DreamList/app/src/lib/database.native.ts) to house the SQLite implementation for mobile environments (iOS & Android).
+  * Created [database.web.ts](file:///c:/Users/21meh/OneDrive/Desktop/DreamList/app/src/lib/database.web.ts) implementing a fully functional mock database utilizing standard browser `localStorage` as a fallback.
+  * Metro automatically selects the appropriate `.native.ts` vs `.web.ts` suffix during resolution, preventing native `expo-sqlite` imports from touching the web bundling pipeline. Verified that the web bundle compiles successfully via `npx expo export`.
+
+
 
 

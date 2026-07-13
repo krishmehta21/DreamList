@@ -29,7 +29,7 @@ import { TierBadge, SkeletonBlock, PulsingGlyph } from '@/components/dreamlist';
 import { supabase } from '@/lib/supabase';
 import type { WishlistItem, WishlistItemDetail, Tier, ItemPrice, ItemAttachment } from '@/lib/types';
 import { TIERS } from '@/lib/types';
-import { getCachedItems, updateCachedItem, deleteCachedItem } from '@/lib/database';
+import { getCachedItems, updateCachedItem, deleteCachedItem, cleanOrphanedTempItems } from '@/lib/database';
 
 const SOURCE_ICONS: Record<string, string> = {
   amazon: '📦 AMAZON',
@@ -261,6 +261,26 @@ export default function ItemDetailScreen() {
       }
     };
   }, [id, load]);
+
+  // Clean orphaned temporary items on load
+  useEffect(() => {
+    if (!id) return;
+    cleanOrphanedTempItems();
+  }, [id]);
+
+  // Poll item status every 10 seconds if it is pending or researching
+  useEffect(() => {
+    if (!id || !item) return;
+    const isResearching = item.status === 'pending' || item.status === 'researching';
+    if (!isResearching) return;
+
+    const interval = setInterval(() => {
+      console.log('Polling item status for stuck check...');
+      load();
+    }, 10000); // 10 seconds
+
+    return () => clearInterval(interval);
+  }, [id, item?.status, load]);
 
   const handleTierChange = async (newTier: Tier) => {
     if (!id || !item || newTier === item.tier) return;

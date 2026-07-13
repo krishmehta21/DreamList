@@ -18,7 +18,7 @@ import { Image } from 'expo-image';
 import { FlashList } from '@shopify/flash-list';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter, useFocusEffect } from 'expo-router';
-import { getCachedItems, saveCachedItems, reconcileItems } from '@/lib/database';
+import { getCachedItems, saveCachedItems, reconcileItems, cleanOrphanedTempItems } from '@/lib/database';
 import { DL, DLFonts, TIER_COLOR } from '@/constants/design';
 import { fetchItems, updateItem, triggerResearch, deleteItem } from '@/lib/api';
 import { FilterChip, ItemCard } from '@/components/dreamlist';
@@ -561,6 +561,9 @@ export default function DashboardScreen() {
   // Load preferences from AsyncStorage and fetch list on focus
   useFocusEffect(
     useCallback(() => {
+      // 0. Clean any orphaned temporary optimistic items from cache
+      cleanOrphanedTempItems();
+      
       // 1. Instantly load from SQLite cache to capture any updates
       const cached = getCachedItems();
       if (cached.length > 0) {

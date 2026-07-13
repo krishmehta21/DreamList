@@ -314,3 +314,33 @@ export function reconcileTransactions(prev: Transaction[], next: Transaction[]):
     return changed ? newTx : prevTx;
   });
 }
+
+/**
+ * Deletes any cached items with a 'temp-' ID that are older than 2 minutes,
+ * as they represent orphaned optimistic writes from failed/hung server creations.
+ */
+export function cleanOrphanedTempItems() {
+  try {
+    const now = new Date();
+    const rows = db.getAllSync(
+      "SELECT id, created_at FROM cached_wishlist_items WHERE id LIKE 'temp-%'"
+    ) as any[];
+
+    for (const row of rows) {
+      try {
+        const createdAt = new Date(row.created_at);
+        const diffTime = Math.abs(now.getTime() - createdAt.getTime());
+        const diffSeconds = diffTime / 1000;
+        if (diffSeconds > 120) {
+          db.runSync('DELETE FROM cached_wishlist_items WHERE id = ?', [row.id]);
+          console.log(`Cleaned up orphaned temporary item: ${row.id}`);
+        }
+      } catch (innerErr) {
+        console.error(`Failed to clean single temp item ${row.id}:`, innerErr);
+      }
+    }
+  } catch (e) {
+    console.error('Failed to clean orphaned temp items:', e);
+  }
+}
+
