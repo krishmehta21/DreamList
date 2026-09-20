@@ -3,11 +3,12 @@ import * as SplashScreen from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';
 import { useEffect } from 'react';
 import { AuthProvider, useAuth } from '@/context/AuthContext';
+import { BudgetProvider } from '@/context/BudgetContext';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { initDatabase } from '@/lib/database';
-import { ThemeProvider, DarkTheme } from '@react-navigation/native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { useShareIntent } from 'expo-share-intent';
+import { CustomAlertModal } from '@/components/CustomAlert';
 
 SplashScreen.preventAutoHideAsync();
 
@@ -72,27 +73,17 @@ export default function RootLayout() {
     initDatabase();
   }, []);
 
-  const CustomDarkTheme = {
-    ...DarkTheme,
-    colors: {
-      ...DarkTheme.colors,
-      background: '#0B0D10',
-      card: '#121519',
-      border: '#1C2026',
-    },
-  };
-
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
       <SafeAreaProvider>
-        <ThemeProvider value={CustomDarkTheme}>
-          <AuthProvider>
-            <StatusBar style="light" />
-            <AuthGate>
+        <AuthProvider>
+          <StatusBar style="dark" />
+          <AuthGate>
+            <BudgetProvider>
               <Stack
                 screenOptions={{
                   headerShown: false,
-                  contentStyle: { backgroundColor: '#0B0D10' },
+                  contentStyle: { backgroundColor: '#F0F4FC' },
                   animation: 'slide_from_right',
                 }}
               >
@@ -100,14 +91,14 @@ export default function RootLayout() {
                   name="login"
                   options={{
                     animation: 'fade',
-                    contentStyle: { backgroundColor: '#0B0D10' },
+                    contentStyle: { backgroundColor: '#3E42B8' },
                   }}
                 />
                 <Stack.Screen
                   name="(tabs)"
                   options={{
                     animation: 'fade',
-                    contentStyle: { backgroundColor: '#0B0D10' },
+                    contentStyle: { backgroundColor: '#F0F4FC' },
                   }}
                 />
                 <Stack.Screen
@@ -115,7 +106,7 @@ export default function RootLayout() {
                   options={{
                     presentation: 'card',
                     animation: 'slide_from_right',
-                    contentStyle: { backgroundColor: '#0B0D10' },
+                    contentStyle: { backgroundColor: '#F0F4FC' },
                   }}
                 />
                 <Stack.Screen
@@ -123,7 +114,7 @@ export default function RootLayout() {
                   options={{
                     presentation: 'modal',
                     animation: 'slide_from_bottom',
-                    contentStyle: { backgroundColor: '#0B0D10' },
+                    contentStyle: { backgroundColor: '#F0F4FC' },
                   }}
                 />
                 <Stack.Screen
@@ -131,7 +122,7 @@ export default function RootLayout() {
                   options={{
                     presentation: 'modal',
                     animation: 'slide_from_bottom',
-                    contentStyle: { backgroundColor: '#0B0D10' },
+                    contentStyle: { backgroundColor: '#F0F4FC' },
                   }}
                 />
                 <Stack.Screen
@@ -139,13 +130,14 @@ export default function RootLayout() {
                   options={{
                     presentation: 'card',
                     animation: 'slide_from_right',
-                    contentStyle: { backgroundColor: '#0B0D10' },
+                    contentStyle: { backgroundColor: '#F0F4FC' },
                   }}
                 />
               </Stack>
-            </AuthGate>
-          </AuthProvider>
-        </ThemeProvider>
+              <CustomAlertModal />
+            </BudgetProvider>
+          </AuthGate>
+        </AuthProvider>
       </SafeAreaProvider>
     </GestureHandlerRootView>
   );

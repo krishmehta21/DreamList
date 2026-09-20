@@ -1,1616 +1,2362 @@
-import React, { useState, useEffect, useCallback, useMemo, useRef, memo } from 'react';
+import React, { useState, useMemo, useCallback } from 'react';
 import {
   View,
   Text,
   ScrollView,
-  RefreshControl,
   StyleSheet,
-  ActivityIndicator,
   Pressable,
-  Platform,
-  Alert,
-  Dimensions,
+  RefreshControl,
+  ActivityIndicator,
+  TextInput,
   Modal,
-  Animated,
-  PanResponder,
+  Vibration,
 } from 'react-native';
-import { Image } from 'expo-image';
-import { FlashList } from '@shopify/flash-list';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useRouter, useFocusEffect } from 'expo-router';
-import { getCachedItems, saveCachedItems, reconcileItems, cleanOrphanedTempItems } from '@/lib/database';
-import { DL, DLFonts, TIER_COLOR } from '@/constants/design';
-import { fetchItems, updateItem, triggerResearch, deleteItem } from '@/lib/api';
-import { FilterChip, ItemCard } from '@/components/dreamlist';
-import { supabase } from '@/lib/supabase';
-import type { WishlistItem, Tier, Category } from '@/lib/types';
-import { TIERS } from '@/lib/types';
-import AsyncStorage from '@react-native-async-storage/async-storage';
-import Sortable from 'react-native-sortables';
-import Reanimated, { useAnimatedRef, useAnimatedStyle, withTiming, LinearTransition } from 'react-native-reanimated';
+import { useRouter } from 'expo-router';
+import ReanimatedSwipeable from 'react-native-gesture-handler/ReanimatedSwipeable';
+import Reanimated, { SharedValue, useAnimatedStyle } from 'react-native-reanimated';
+import { LinearGradient } from 'expo-linear-gradient';
+import { DL, DLFonts } from '@/constants/design';
+import { useBudget } from '@/context/BudgetContext';
+import { Transaction } from '@/lib/expensesApi';
+import { CustomAlert as Alert } from '@/components/CustomAlert';
+import {
+  PlusIcon,
+  TrashIcon,
+  CopyIcon,
+  ShieldLockIcon,
+  CheckIcon,
+  LayersIcon,
+  ChevronLeftIcon,
+  ChevronRightIcon,
+  CalendarIcon,
+  ArrowDownIcon,
+  ArrowUpRightIcon,
+  ContactlessIcon,
+  AnalyticsIcon,
+  TargetIcon,
+} from '@/components/ui/TabIcons';
+import { CategoryIcon, getCategoryEmoji } from '@/components/ui/CategoryIcon';
+import { parseTransactionNote } from '@/lib/subcategories';
 
-const ReanimatedLayoutTransition = LinearTransition.springify().damping(18).stiffness(120);
+// ─── Swipe Action Components ──────────────────────────────────────────────────
 
-// ─── Folder Card ─────────────────────────────────────────────────────────────
-type FolderDatum = {
-  id: string;
-  category: Category;
-  items: WishlistItem[];
-  indexStr: string;
-};
+function DeleteSwipeAction({
+  prog,
+  drag,
+  onDelete,
+}: {
+  prog: SharedValue<number>;
+  drag: SharedValue<number>;
+  onDelete: () => void;
+}) {
+  const animStyle = useAnimatedStyle(() => {
+    const scale = Math.min(1, Math.max(0.5, prog.value));
+    return {
+      transform: [
+        { translateX: drag.value + 76 },
+        { scale },
+      ],
+      opacity: prog.value,
+    };
+  });
 
-type LayoutSection = 
-  | { type: 'wide'; category: Category }
-  | { type: 'grid'; left: Category[]; right: Category[] };
-
-import type { DimensionValue, LayoutChangeEvent } from 'react-native';
-
-interface FolderCardProps {
-  folder: FolderDatum;
-  editMode: boolean;
-  size: 'small' | 'medium' | 'wide';
-  width: DimensionValue;
-  onPressItem: (item: WishlistItem) => void;
-  onToggleDone: (id: string, done: boolean) => void;
-  onPressCard: () => void;
-  onLongPressCard?: () => void;
-  onHide: () => void;
-  onLayout?: (event: LayoutChangeEvent) => void;
-  onSizeChange: (category: Category, size: 'small' | 'medium' | 'wide') => void;
+  return (
+    <Reanimated.View style={[styles.deleteActionWrap, animStyle]}>
+      <Pressable style={styles.actionBtnInner} onPress={onDelete}>
+        <TrashIcon color="#FFFFFF" size={18} />
+        <Text style={styles.actionBtnText}>DELETE</Text>
+      </Pressable>
+    </Reanimated.View>
+  );
 }
 
-const FolderCard = memo(function FolderCard({
-  folder, editMode, size, width, onPressItem, onToggleDone, onPressCard, onLongPressCard, onHide, onLayout, onSizeChange,
-}: FolderCardProps) {
-  const totalCount = folder.items.length;
-  const completedCount = folder.items.filter((i) => i.done).length;
-  const progress = totalCount > 0 ? completedCount / totalCount : 0;
-  const countStr = String(totalCount).padStart(2, '0');
-  const isEmpty = totalCount === 0;
-  const isCompleted = totalCount > 0 && completedCount === totalCount;
-
-  const animatedStyle = useAnimatedStyle(() => {
+function DuplicateSwipeAction({
+  prog,
+  drag,
+  onDuplicate,
+}: {
+  prog: SharedValue<number>;
+  drag: SharedValue<number>;
+  onDuplicate: () => void;
+}) {
+  const animStyle = useAnimatedStyle(() => {
+    const scale = Math.min(1, Math.max(0.5, prog.value));
     return {
-      width: withTiming(`${progress * 100}%`, { duration: 300 }),
+      transform: [
+        { translateX: drag.value - 76 },
+        { scale },
+      ],
+      opacity: prog.value,
     };
-  }, [progress]);
+  });
 
-  const displayItems = useMemo(() => {
-    if (size === 'small') {
-      return folder.items.slice(0, 3);
-    }
-    return folder.items;
-  }, [folder.items, size]);
-
-  const remainingCount = totalCount - displayItems.length;
-
-  const renderRightIndicator = useCallback((item: WishlistItem) => {
-    if (item.status === 'researching') {
-      return (
-        <View style={styles.researchingBadge}>
-          <Text style={styles.researchingBadgeText}>AI ⚡</Text>
-        </View>
-      );
-    }
-
-    const prices = item.prices;
-    const lowestPrice = prices && prices.length > 0
-      ? Math.min(...prices.map((p) => Number(p.price)))
-      : null;
-
-    if (lowestPrice && lowestPrice > 0) {
-      const priceStr = `₹${Math.round(lowestPrice).toLocaleString('en-IN')}`;
-      return (
-        <Text style={styles.miniPriceText}>{priceStr}</Text>
-      );
-    }
-
-    const tierLabel = item.tier.toUpperCase();
-    return (
-      <View style={[styles.miniTierBadge, { borderColor: TIER_COLOR[item.tier] + '35' }]}>
-        <Text style={[styles.miniTierBadgeText, { color: TIER_COLOR[item.tier] }]}>{tierLabel}</Text>
-      </View>
-    );
-  }, []);
-
-  const CardContent = (
-    <>
-      {/* Edit mode: ✕ delete badge + drag handle indicator */}
-      {editMode && (
-        <>
-          <Pressable style={styles.editDeleteBadge} onPress={onHide} hitSlop={8}>
-            <Text style={styles.editDeleteBadgeText}>✕</Text>
-          </Pressable>
-          {/* Drag hint: 6-dot grip at top-right */}
-          <View style={styles.dragHandle}>
-            <View style={styles.dragHandleDots}>
-              {[0,1,2,3,4,5].map((i) => (
-                <View key={i} style={styles.dragHandleDot} />
-              ))}
-            </View>
-          </View>
-        </>
-      )}
-
-      {/* Header */}
-      <View style={styles.folderHeader}>
-        <View style={styles.folderHeaderLeft}>
-          <Text style={styles.folderIndex}>{folder.indexStr}</Text>
-          <View style={styles.titleProgressContainer}>
-            <Text style={styles.folderTitle} numberOfLines={1}>
-              {folder.category.toUpperCase()}
-            </Text>
-            {!isEmpty && (
-              <View style={styles.miniProgressBarTrack}>
-                <Reanimated.View style={[styles.miniProgressBarFill, animatedStyle]} />
-              </View>
-            )}
-          </View>
-        </View>
-
-        {editMode ? (
-          <View style={styles.sizePicker}>
-            {(['small', 'medium', 'wide'] as const).map((sz) => (
-              <Pressable
-                key={sz}
-                onPress={() => onSizeChange(folder.category, sz)}
-                style={[styles.sizePill, size === sz && styles.sizePillActive]}
-              >
-                <Text style={[styles.sizePillText, size === sz && styles.sizePillTextActive]}>
-                  {sz.charAt(0).toUpperCase()}
-                </Text>
-              </Pressable>
-            ))}
-          </View>
-        ) : (
-          <Text style={[styles.folderCount, isEmpty && { opacity: 0.3 }]}>{countStr}</Text>
-        )}
-      </View>
-
-      {/* Card Content (checklists) */}
-      <View style={styles.cardContent}>
-        {isEmpty ? (
-          <View style={styles.emptyBadgeRow}>
-            <Text style={styles.emptyBadgeText}>EMPTY</Text>
-          </View>
-        ) : isCompleted ? (
-          <View style={styles.completedBadgeRow}>
-            <Text style={styles.completedBadgeText}>✓ Everything acquired</Text>
-          </View>
-        ) : (
-          <>
-            <View style={styles.folderChecklist}>
-              {displayItems.map((item) => (
-                <View key={item.id} style={styles.checklistRow}>
-                  <Pressable
-                    style={styles.miniCheckboxHit}
-                    onPress={editMode ? undefined : () => onToggleDone(item.id, !item.done)}
-                    hitSlop={4}
-                  >
-                    <View style={[styles.miniCheckbox, item.done && styles.miniCheckboxDone]}>
-                      {item.done && <View style={styles.miniCheckboxTick} />}
-                    </View>
-                  </Pressable>
-
-                  <Pressable
-                    style={styles.miniNameHit}
-                    onPress={editMode ? undefined : () => onPressItem(item)}
-                  >
-                    <Text
-                      style={[styles.miniListName, item.done && styles.miniListNameDone]}
-                      numberOfLines={1}
-                      ellipsizeMode="tail"
-                    >
-                      {item.name}
-                    </Text>
-                  </Pressable>
-
-                  {renderRightIndicator(item)}
-                </View>
-              ))}
-            </View>
-
-            {remainingCount > 0 && (
-              <View style={styles.remainingRow}>
-                <Text style={styles.remainingText}>+ {remainingCount} remaining</Text>
-              </View>
-            )}
-          </>
-        )}
-      </View>
-    </>
+  return (
+    <Reanimated.View style={[styles.duplicateActionWrap, animStyle]}>
+      <Pressable style={styles.actionBtnInner} onPress={onDuplicate}>
+        <CopyIcon color="#FFFFFF" size={18} />
+        <Text style={[styles.actionBtnText, { color: '#06B6D4' }]}>REPEAT</Text>
+      </Pressable>
+    </Reanimated.View>
   );
+}
 
-  if (editMode) {
+// ─── Memoized Transaction Item Component ──────────────────────────────────────
+
+const TransactionRow = React.memo(function TransactionRow({
+  tx,
+  isSelectMode,
+  isSelected,
+  onToggleSelect,
+  onPress,
+  onLongPress,
+  onDuplicate,
+  onDelete,
+}: {
+  tx: Transaction;
+  isSelectMode: boolean;
+  isSelected: boolean;
+  onToggleSelect: (id: string) => void;
+  onPress: (id: string) => void;
+  onLongPress: (id: string) => void;
+  onDuplicate: (tx: Transaction) => void;
+  onDelete: (tx: Transaction) => void;
+}) {
+  const isIncome = tx.type === 'income';
+  const parsed = useMemo(() => parseTransactionNote(tx.note), [tx.note]);
+  const mainTitle = tx.category?.name || (isIncome ? 'Income' : 'Expense');
+  const subTitle = parsed.subcategory
+    ? (parsed.detail ? `${parsed.subcategory} • ${parsed.detail}` : parsed.subcategory)
+    : (parsed.detail || 'General');
+
+  const handleDuplicate = useCallback(() => onDuplicate(tx), [tx, onDuplicate]);
+  const handleDelete = useCallback(() => onDelete(tx), [tx, onDelete]);
+  const handlePress = useCallback(() => {
+    Vibration.vibrate(10);
+    if (isSelectMode) {
+      onToggleSelect(tx.id);
+    } else {
+      onPress(tx.id);
+    }
+  }, [isSelectMode, tx.id, onToggleSelect, onPress]);
+  const handleLongPress = useCallback(() => {
+    Vibration.vibrate(30);
+    onLongPress(tx.id);
+  }, [tx.id, onLongPress]);
+
+  if (isSelectMode) {
     return (
-      <View
-        style={{ width: '100%' }}
-        onLayout={onLayout}
+      <Pressable
+        style={({ pressed }) => [
+          styles.txCard,
+          isSelected && styles.txCardChecked,
+          pressed && styles.txCardPressed,
+        ]}
+        onPress={handlePress}
       >
-        {CardContent}
-      </View>
+        <View style={[styles.checkbox, isSelected && styles.checkboxChecked]}>
+          {isSelected && <CheckIcon color="#FFFFFF" size={14} />}
+        </View>
+
+        <View style={styles.txLeft}>
+          <CategoryIcon
+            icon={tx.category?.icon}
+            name={tx.category?.name}
+            size={38}
+            fontSize={18}
+          />
+          <View style={{ flex: 1 }}>
+            <View style={styles.titleRow}>
+              <Text style={styles.txTitle} numberOfLines={1}>
+                {mainTitle}
+              </Text>
+              {parsed.subcategory && (
+                <View style={styles.subcatPill}>
+                  <Text style={styles.subcatPillText}>{parsed.subcategory}</Text>
+                </View>
+              )}
+            </View>
+            <Text style={styles.txCategory} numberOfLines={1}>
+              {subTitle}
+            </Text>
+          </View>
+        </View>
+
+        <Text
+          style={[
+            styles.txAmount,
+            isIncome ? styles.txAmountIncome : styles.txAmountExpense,
+          ]}
+        >
+          {isIncome ? '+' : '-'}₹{Math.abs(tx.amount).toLocaleString('en-IN')}
+        </Text>
+      </Pressable>
     );
   }
 
   return (
-    <Pressable
-      style={[
-        styles.folderCard,
-        isEmpty && styles.folderCardEmpty,
-        { width }
-      ]}
-      onPress={onPressCard}
-      onLongPress={onLongPressCard}
-      delayLongPress={300}
-      onLayout={onLayout}
-    >
-      {CardContent}
-    </Pressable>
+    <View style={styles.swipeContainer}>
+      <ReanimatedSwipeable
+        friction={1.6}
+        overshootFriction={10}
+        overshootRight={false}
+        overshootLeft={false}
+        rightThreshold={35}
+        leftThreshold={35}
+        renderLeftActions={(prog, drag) => (
+          <DuplicateSwipeAction
+            prog={prog}
+            drag={drag}
+            onDuplicate={handleDuplicate}
+          />
+        )}
+        renderRightActions={(prog, drag) => (
+          <DeleteSwipeAction
+            prog={prog}
+            drag={drag}
+            onDelete={handleDelete}
+          />
+        )}
+      >
+        <Pressable
+          style={({ pressed }) => [styles.txCard, pressed && styles.txCardPressed]}
+          onPress={handlePress}
+          onLongPress={handleLongPress}
+        >
+          <View style={styles.txLeft}>
+            <CategoryIcon
+              icon={tx.category?.icon}
+              name={tx.category?.name}
+              size={38}
+              fontSize={18}
+            />
+            <View style={{ flex: 1 }}>
+              <View style={styles.titleRow}>
+                <Text style={styles.txTitle} numberOfLines={1}>
+                  {mainTitle}
+                </Text>
+                {parsed.subcategory && (
+                  <View style={styles.subcatPill}>
+                    <Text style={styles.subcatPillText}>{parsed.subcategory}</Text>
+                  </View>
+                )}
+              </View>
+              <Text style={styles.txCategory} numberOfLines={1}>
+                {subTitle}
+                {tx.regret && (
+                  <Text style={styles.txRegret}> • {tx.regret}</Text>
+                )}
+              </Text>
+            </View>
+          </View>
+
+          <Text
+            style={[
+              styles.txAmount,
+              isIncome ? styles.txAmountIncome : styles.txAmountExpense,
+            ]}
+          >
+            {isIncome ? '+' : '-'}₹{Math.abs(tx.amount).toLocaleString('en-IN')}
+          </Text>
+        </Pressable>
+      </ReanimatedSwipeable>
+    </View>
   );
 });
 
-export default function DashboardScreen() {
+// ─── Helper: Format Date Grouping ─────────────────────────────────────────────
+type GroupKey = 'Today' | 'Yesterday' | 'This Week' | 'Earlier';
+
+function getGroupKey(dateStr: string): GroupKey {
+  const date = new Date(dateStr);
+  const now = new Date();
+
+  const isSameDay = (d1: Date, d2: Date) =>
+    d1.getFullYear() === d2.getFullYear() &&
+    d1.getMonth() === d2.getMonth() &&
+    d1.getDate() === d2.getDate();
+
+  if (isSameDay(date, now)) return 'Today';
+
+  const yesterday = new Date(now);
+  yesterday.setDate(yesterday.getDate() - 1);
+  if (isSameDay(date, yesterday)) return 'Yesterday';
+
+  const diffDays = Math.floor((now.getTime() - date.getTime()) / (1000 * 60 * 60 * 24));
+  if (diffDays <= 7) return 'This Week';
+
+  return 'Earlier';
+}
+
+// ─── Bulk Add Item Draft Type ─────────────────────────────────────────────────
+interface BulkItemDraft {
+  id: string;
+  amount: string;
+  category_id: string;
+  note: string;
+}
+
+export default function TrackerScreen() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
-  const hasLoadedOnce = useRef(false);
-  const scrollableRef = useAnimatedRef<ScrollView>();
 
-  const numSegments = useMemo(() => {
-    const screenWidth = Dimensions.get('window').width;
-    const containerWidth = screenWidth - 40;
-    return Math.floor((containerWidth - 3) / 9);
-  }, []);
+  const {
+    activeMonth,
+    budgetMonth,
+    budgetState,
+    healthState,
+    transactions,
+    categories,
+    vaultBalance,
+    isLoading,
+    refreshData,
+    changeMonth,
+    resetMonthData,
+    deleteTransactionContext,
+    duplicateTransactionContext,
+    bulkDeleteTransactions,
+    bulkAddTransactions,
+    depositToVault,
+    withdrawFromVault,
+  } = useBudget();
 
-  const columns = useMemo(() => {
-    const screenWidth = Dimensions.get('window').width;
-    return screenWidth > 768 ? 4 : (screenWidth > 480 ? 3 : 2);
-  }, []);
-
-  const cardWidth = useMemo(() => {
-    const screenWidth = Dimensions.get('window').width;
-    const gap = 8;
-    const horizontalPadding = 12;
-    return Math.floor((screenWidth - (horizontalPadding * 2) - (gap * (columns - 1))) / columns);
-  }, [columns]);
-
-  const wideCardWidth = useMemo(() => {
-    const screenWidth = Dimensions.get('window').width;
-    const horizontalPadding = 12;
-    return screenWidth - (horizontalPadding * 2);
-  }, []);
-
-  const DEFAULT_CATEGORY_ORDER: Category[] = ['Tech', 'Home', 'Apparel', 'Books', 'Fitness', 'Other'];
-
-  const [items, setItems] = useState<WishlistItem[]>(() => getCachedItems());
-  const [tierFilter, setTierFilter] = useState<Tier | null>(null);
   const [refreshing, setRefreshing] = useState(false);
-  const [loading, setLoading] = useState(() => getCachedItems().length === 0);
-  const [editMode, setEditMode] = useState(false);
-  const [categoryOrder, setCategoryOrder] = useState<Category[]>(DEFAULT_CATEGORY_ORDER);
-  const [hiddenCategories, setHiddenCategories] = useState<Set<Category>>(new Set());
+  const [filterType, setFilterType] = useState<'all' | 'expense' | 'income'>('all');
+  const [selectedCatId, setSelectedCatId] = useState<string | null>(null);
 
-  // Card size preferences: small, medium, wide
-  const [cardSizes, setCardSizes] = useState<Record<Category, 'small' | 'medium' | 'wide'>>({
-    Tech: 'wide',
-    Home: 'wide',
-    Apparel: 'wide',
-    Books: 'wide',
-    Fitness: 'wide',
-    Other: 'wide',
-  });
-  // Actual measured heights via onLayout
-  const [cardHeights, setCardHeights] = useState<Record<Category, number>>({} as any);
-  // Column assignment cache for layout stability
-  const [columnLayout, setColumnLayout] = useState<Record<string, { left: Category[]; right: Category[] }>>({});
+  // ─── Month Navigation & Reset Modal ─────────────────────────────────────────
+  const [showMonthModal, setShowMonthModal] = useState(false);
+  const [isResettingMonth, setIsResettingMonth] = useState(false);
 
-  const [customAlert, setCustomAlert] = useState<{
-    title: string;
-    message: string;
-    buttons: { text: string; style?: 'cancel' | 'destructive' | 'default'; onPress: () => void }[];
-  } | null>(null);
+  // ─── Bulk Selection State ───────────────────────────────────────────────────
+  const [isSelectMode, setIsSelectMode] = useState(false);
+  const [selectedTxIds, setSelectedTxIds] = useState<Set<string>>(new Set());
 
-  const showCustomAlert = useCallback((
-    title: string,
-    message: string,
-    buttons?: { text: string; style?: 'cancel' | 'destructive' | 'default'; onPress?: () => void }[]
-  ) => {
-    setCustomAlert({
-      title,
-      message,
-      buttons: buttons && buttons.length > 0 ? buttons.map(b => ({
-        text: b.text,
-        style: b.style,
-        onPress: () => {
-          setCustomAlert(null);
-          if (b.onPress) b.onPress();
-        }
-      })) : [{
-        text: 'OK',
-        onPress: () => setCustomAlert(null)
-      }]
-    });
-  }, []);
+  // ─── Bulk Add Modal State ───────────────────────────────────────────────────
+  const [showBulkAddModal, setShowBulkAddModal] = useState(false);
+  const [bulkDrafts, setBulkDrafts] = useState<BulkItemDraft[]>([]);
+  const [isSubmittingBulkAdd, setIsSubmittingBulkAdd] = useState(false);
 
-  // Load persisted layout and card sizes from AsyncStorage
-  useEffect(() => {
-    AsyncStorage.getItem('dl_category_order').then((val) => {
-      if (val) {
-        try {
-          const parsed: Category[] = JSON.parse(val);
-          // Keep all parsed categories (including custom ones), then append missing defaults
-          const merged = [
-            ...parsed,
-            ...DEFAULT_CATEGORY_ORDER.filter((c) => !parsed.includes(c)),
-          ];
-          setCategoryOrder(merged);
-        } catch {}
-      }
-    });
-    AsyncStorage.getItem('dl_hidden_categories').then((val) => {
-      if (val) {
-        try { setHiddenCategories(new Set(JSON.parse(val))); } catch {}
-      }
-    });
-    AsyncStorage.getItem('dl_card_sizes').then((val) => {
-      if (val) {
-        try { setCardSizes(JSON.parse(val)); } catch {}
-      }
-    });
-  }, []);
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true);
+    await refreshData();
+    setRefreshing(false);
+  }, [refreshData]);
 
-  // Sync category order to include any categories from loaded items (e.g. custom categories)
-  useEffect(() => {
-    if (items.length === 0) return;
-    const uniqueCategories = Array.from(new Set(items.map((i) => i.category || 'Other')));
-    const missing = uniqueCategories.filter((c) => !categoryOrder.includes(c));
-    if (missing.length > 0) {
-      setCategoryOrder((prev) => {
-        const next = [...prev, ...missing];
-        AsyncStorage.setItem('dl_category_order', JSON.stringify(next));
-        return next;
-      });
-    }
-  }, [items, categoryOrder]);
+  // Formatted Month Header
+  const formattedMonth = useMemo(() => {
+    if (!activeMonth) return '';
+    const [year, m] = activeMonth.split('-');
+    const date = new Date(parseInt(year), parseInt(m) - 1, 1);
+    return date.toLocaleDateString('en-US', { month: 'long', year: 'numeric' }).toUpperCase();
+  }, [activeMonth]);
 
-  const saveCategoryOrder = useCallback(async (order: Category[]) => {
-    setCategoryOrder(order);
-    await AsyncStorage.setItem('dl_category_order', JSON.stringify(order));
-  }, []);
+  // Month navigation handlers
+  const handlePrevMonth = () => {
+    if (!activeMonth) return;
+    const [y, m] = activeMonth.split('-').map(Number);
+    const d = new Date(y, m - 2, 1);
+    const prevStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+    changeMonth(prevStr);
+  };
 
-  const saveCardSizes = useCallback(async (sizes: Record<Category, 'small' | 'medium' | 'wide'>) => {
-    setCardSizes(sizes);
-    await AsyncStorage.setItem('dl_card_sizes', JSON.stringify(sizes));
-  }, []);
+  const handleNextMonth = () => {
+    if (!activeMonth) return;
+    const [y, m] = activeMonth.split('-').map(Number);
+    const d = new Date(y, m, 1);
+    const nextStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+    changeMonth(nextStr);
+  };
 
-  const handleSizeChange = useCallback((cat: Category, size: 'small' | 'medium' | 'wide') => {
-    saveCardSizes({ ...cardSizes, [cat]: size });
-  }, [cardSizes, saveCardSizes]);
+  const handleJumpToMonth = (monthOffset: number) => {
+    const now = new Date();
+    const d = new Date(now.getFullYear(), now.getMonth() + monthOffset, 1);
+    const targetStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+    changeMonth(targetStr);
+    setShowMonthModal(false);
+  };
 
-  // Height estimation helper for initial layout before onLayout measures
-  const getEstimatedHeight = useCallback((cat: Category) => {
-    const catItems = items.filter((item) => (item.category || 'Other') === cat);
-    const size = cardSizes[cat] || 'medium';
-    let showCount = catItems.length;
-    if (size === 'small') {
-      showCount = Math.min(3, catItems.length);
-    }
-    const baseHeight = 50 + 14; // header index/title + title spacing
-    const rowHeight = 34; // item text + line height + 12px vertical spacing
-    const padding = 36; // 18px top and bottom internal padding
-    const bottomHeight = catItems.length === 0 ? 30 : (size === 'small' && catItems.length > 3 ? 24 : 10);
-    return baseHeight + (showCount * rowHeight) + padding + bottomHeight;
-  }, [items, cardSizes]);
-
-  // Height measurement update reported by FolderCard
-  const handleCardHeightChange = useCallback((category: Category, height: number) => {
-    setCardHeights((prev) => {
-      if (Math.abs((prev[category] || 0) - height) < 2) return prev;
-      return { ...prev, [category]: height };
-    });
-  }, []);
-
-  // Compute layout blocks (Wide categories vs Balanced standard grid blocks)
-  const layoutSections = useMemo(() => {
-    const sections: LayoutSection[] = [];
-    let currentGridBlock: Category[] = [];
-    let blockIndex = 0;
-
-    const pushGridBlock = (cats: Category[]) => {
-      const blockKey = `block-${blockIndex}-${cats.join('-')}`;
-      blockIndex++;
-
-      // Greedy balancer to divide cards into left and right columns
-      const balanceGreedy = () => {
-        let left: Category[] = [];
-        let right: Category[] = [];
-        let leftH = 0;
-        let rightH = 0;
-
-        cats.forEach((cat) => {
-          const h = cardHeights[cat] || getEstimatedHeight(cat);
-          if (leftH <= rightH) {
-            left.push(cat);
-            leftH += h;
-          } else {
-            right.push(cat);
-            rightH += h;
-          }
-        });
-        return { left, right, leftH, rightH };
-      };
-
-      const proposed = balanceGreedy();
-
-      // Retrieve cached layout for stability hysteresis
-      const prev = columnLayout[blockKey];
-      if (prev) {
-        let prevLeftH = 0;
-        let prevRightH = 0;
-        prev.left.forEach((cat) => { prevLeftH += (cardHeights[cat] || getEstimatedHeight(cat)); });
-        prev.right.forEach((cat) => { prevRightH += (cardHeights[cat] || getEstimatedHeight(cat)); });
-
-        const prevDiff = Math.abs(prevLeftH - prevRightH);
-        const proposedDiff = Math.abs(proposed.leftH - proposed.rightH);
-
-        // Hysteresis: only rebalance columns if imbalance is reduced by more than 80px
-        if (proposedDiff < prevDiff - 80) {
-          sections.push({ type: 'grid', left: proposed.left, right: proposed.right });
-        } else {
-          sections.push({ type: 'grid', left: prev.left, right: prev.right });
-        }
-      } else {
-        sections.push({ type: 'grid', left: proposed.left, right: proposed.right });
-      }
-    };
-
-    categoryOrder.forEach((cat) => {
-      if (hiddenCategories.has(cat)) return;
-      const isWide = cardSizes[cat] === 'wide';
-      if (isWide) {
-        if (currentGridBlock.length > 0) {
-          pushGridBlock(currentGridBlock);
-          currentGridBlock = [];
-        }
-        sections.push({ type: 'wide', category: cat });
-      } else {
-        currentGridBlock.push(cat);
-      }
-    });
-
-    if (currentGridBlock.length > 0) {
-      pushGridBlock(currentGridBlock);
-    }
-
-    return sections;
-  }, [categoryOrder, hiddenCategories, cardSizes, cardHeights, getEstimatedHeight, columnLayout]);
-
-  // Sync computed layouts to columnLayout to persist column stability assignments
-  useEffect(() => {
-    let blockIndex = 0;
-    const newLayout: Record<string, { left: Category[]; right: Category[] }> = {};
-    let changed = false;
-
-    layoutSections.forEach((sec) => {
-      if (sec.type === 'grid') {
-        const cats = [...sec.left, ...sec.right].sort();
-        const blockKey = `block-${blockIndex}-${cats.join('-')}`;
-        blockIndex++;
-
-        const current = columnLayout[blockKey];
-        if (!current || JSON.stringify(current.left) !== JSON.stringify(sec.left)) {
-          newLayout[blockKey] = { left: sec.left, right: sec.right };
-          changed = true;
-        } else {
-          newLayout[blockKey] = current;
-        }
-      }
-    });
-
-    if (changed) {
-      setColumnLayout((prev) => ({ ...prev, ...newLayout }));
-    }
-  }, [layoutSections, columnLayout]);
-
-  const saveHiddenCategories = useCallback(async (hidden: Set<Category>) => {
-    setHiddenCategories(hidden);
-    await AsyncStorage.setItem('dl_hidden_categories', JSON.stringify([...hidden]));
-  }, []);
-
-  const handleHideCategory = useCallback((cat: Category) => {
-    showCustomAlert(
-      `Hide ${cat}?`,
-      'This folder will be hidden from the dashboard. You can restore it from Settings.',
+  const handleResetCurrentMonth = () => {
+    Alert.alert(
+      'Reset & Start Fresh',
+      `Delete all transactions and reset data for ${formattedMonth}? This gives you a completely clean slate for this month.`,
       [
         { text: 'Cancel', style: 'cancel' },
         {
-          text: 'Hide',
+          text: 'Reset Month',
           style: 'destructive',
-          onPress: () => {
-            const newHidden = new Set(hiddenCategories);
-            newHidden.add(cat);
-            saveHiddenCategories(newHidden);
+          onPress: async () => {
+            try {
+              setIsResettingMonth(true);
+              Vibration.vibrate(80);
+              await resetMonthData(activeMonth);
+              setShowMonthModal(false);
+              Alert.alert('Fresh Start', `All transactions for ${formattedMonth} have been cleared.`);
+            } catch (e: any) {
+              Alert.alert('Error', e.message || 'Failed to reset month');
+            } finally {
+              setIsResettingMonth(false);
+            }
           },
         },
       ]
     );
-  }, [hiddenCategories, saveHiddenCategories, showCustomAlert]);
+  };
 
-  const handleMoveCategory = useCallback((_cat: Category, _dir: 'left' | 'right') => {
-    // No-op: reordering is now done via DraggableFlatList drag-and-drop
-  }, []);
-
-  // Load ALL items from server — filter is done client-side
-  const loadItems = useCallback(async (silent = false) => {
-    if (!silent && !hasLoadedOnce.current) {
-      setLoading(true);
-    }
+  // Quick 1-step vault actions
+  const handleQuickDeposit = async (amt: number) => {
     try {
-      const data = await fetchItems(); // always fetch all, no tier filter
-      setItems((prev) => {
-        const reconciled = reconcileItems(prev, data);
-        saveCachedItems(reconciled);
-        return reconciled;
-      });
-    } catch (err) {
-      console.error('Fetch items failed:', err);
-    } finally {
-      setLoading(false);
+      Vibration.vibrate(40);
+      await depositToVault(amt, 'Quick Vault Deposit');
+      Alert.alert('Vault Updated', `₹${amt.toLocaleString('en-IN')} stored into Vault.`);
+    } catch (e: any) {
+      Alert.alert('Error', e.message || 'Deposit failed');
     }
-  }, []); // no tierFilter dep — prevents re-fetch on chip tap
+  };
 
-  // Load preferences from AsyncStorage and fetch list on focus
-  useFocusEffect(
-    useCallback(() => {
-      // 0. Clean any orphaned temporary optimistic items from cache
-      cleanOrphanedTempItems();
-      
-      // 1. Instantly load from SQLite cache to capture any updates
-      const cached = getCachedItems();
-      if (cached.length > 0) {
-        setItems(cached);
-      }
-      
-      // 2. Parallel background fetch
-      loadItems(cached.length > 0).finally(() => {
-        hasLoadedOnce.current = true;
-      });
-    }, [loadItems])
-  );
+  const handleQuickWithdraw = (amt: number) => {
+    if (amt > vaultBalance) {
+      Alert.alert('Vault Balance Low', `You have ₹${vaultBalance.toLocaleString('en-IN')} in vault.`);
+      return;
+    }
+    Alert.alert(
+      'Withdraw & Spend',
+      `Withdrawing ₹${amt.toLocaleString('en-IN')} will record it as spent from your reserve. Proceed?`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Spend ₹' + amt.toLocaleString('en-IN'),
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              Vibration.vibrate(60);
+              await withdrawFromVault(amt, true, 'Vault withdrawal');
+            } catch (e: any) {
+              Alert.alert('Error', e.message || 'Withdrawal failed');
+            }
+          },
+        },
+      ]
+    );
+  };
 
-  // Realtime subscription setup
-  useEffect(() => {
-    const channel = supabase
-      .channel('dashboard-realtime')
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'wishlist_items' },
-        () => {
-          loadItems(true);
-        }
-      )
-      .subscribe();
+  // Transaction Actions
+  const handleDelete = (tx: Transaction) => {
+    Alert.alert(
+      'Delete Transaction',
+      `Delete "${tx.note || tx.category?.name || 'Transaction'}" of ₹${Math.abs(tx.amount)}?`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: async () => {
+            Vibration.vibrate(50);
+            await deleteTransactionContext(tx.id);
+          },
+        },
+      ]
+    );
+  };
 
-    return () => {
-      supabase.removeChannel(channel);
-    };
-  }, [loadItems]);
+  const handleDuplicate = async (tx: Transaction) => {
+    try {
+      Vibration.vibrate(40);
+      await duplicateTransactionContext(tx);
+      Alert.alert('Logged Again', `Repeated "${tx.note || tx.category?.name || 'Expense'}" for today.`);
+    } catch (e: any) {
+      Alert.alert('Error', e.message || 'Duplicate failed');
+    }
+  };
 
-  const onRefresh = useCallback(async () => {
-    setRefreshing(true);
-    await loadItems();
-    setRefreshing(false);
-  }, [loadItems]);
-
-  const handleToggleDone = useCallback(
-    async (id: string, done: boolean) => {
-      let previousItems: WishlistItem[] = [];
-      
-      // 1. Optimistic Update locally
-      setItems((prev) => {
-        previousItems = prev;
-        const updated = prev.map((item) =>
-          item.id === id ? { ...item, done } : item
-        );
-        saveCachedItems(updated);
-        return updated;
-      });
-      
-      // 2. Sync to remote server
-      try {
-        await updateItem(id, { done });
-
-        if (done) {
-          const item = previousItems.find((i) => i.id === id);
-          if (item) {
-            const lowestPrice = item.prices && item.prices.length > 0
-              ? Math.min(...item.prices.map((p) => Number(p.price)))
-              : 0;
-
-            showCustomAlert(
-              'ITEM ACQUIRED',
-              `Would you like to log "${item.name}" as an expense in your Ledger?`,
-              [
-                { text: 'Skip', style: 'cancel' },
-                {
-                  text: 'Log Expense',
-                  style: 'default',
-                  onPress: () => {
-                    router.push({
-                      pathname: '/expenses/transaction',
-                      params: {
-                        note: item.name,
-                        amount: lowestPrice || '',
-                        category_name: item.category,
-                        linked_item_id: item.id,
-                      },
-                    });
-                  },
-                },
-              ]
-            );
-          }
-        }
-      } catch {
-        // Rollback
-        setItems(() => {
-          saveCachedItems(previousItems);
-          return previousItems;
-        });
-        showCustomAlert('Sync Failed', 'Failed to update item status. Rolled back.');
-      }
-    },
-    [showCustomAlert, router]
-  );
-
-  const handleRetryResearch = useCallback(
-    async (id: string) => {
-      let previousItems: WishlistItem[] = [];
-      
-      // 1. Optimistic Update locally
-      setItems((prev) => {
-        previousItems = prev;
-        const updated = prev.map((item) =>
-          item.id === id ? { ...item, status: 'pending' as const } : item
-        );
-        saveCachedItems(updated);
-        return updated;
-      });
-      
-      // 2. Sync to remote server
-      try {
-        await triggerResearch(id);
-      } catch {
-        // Rollback
-        setItems(() => {
-          saveCachedItems(previousItems);
-          return previousItems;
-        });
-        showCustomAlert('Sync Failed', 'Failed to trigger research retry. Rolled back.');
-      }
-    },
-    [showCustomAlert]
-  );
-
-  const handlePressCard = useCallback((item: WishlistItem) => {
-    router.push(`/items/${item.id}`);
+  const handleTxPress = useCallback((id: string) => {
+    router.push({
+      pathname: '/expenses/transaction',
+      params: { id },
+    });
   }, [router]);
 
-  const handleDeleteItem = useCallback(async (id: string) => {
-    let previousItems: WishlistItem[] = [];
-    // Optimistic remove
-    setItems((prev) => {
-      previousItems = prev;
-      const updated = prev.filter((i) => i.id !== id);
-      saveCachedItems(updated);
-      return updated;
+  const handleTxLongPress = useCallback((id: string) => {
+    setIsSelectMode(true);
+    toggleSelectTx(id);
+  }, []);
+
+  // ─── Bulk Delete Handlers ───────────────────────────────────────────────────
+  const toggleSelectTx = useCallback((id: string) => {
+    Vibration.vibrate(20);
+    setSelectedTxIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
     });
-    try {
-      await deleteItem(id);
-    } catch {
-      // Rollback
-      setItems(() => {
-        saveCachedItems(previousItems);
-        return previousItems;
-      });
-      showCustomAlert('Error', 'Could not delete item. Please try again.');
+  }, []);
+
+  const handleSelectAll = () => {
+    if (selectedTxIds.size === filteredTransactions.length) {
+      setSelectedTxIds(new Set());
+    } else {
+      setSelectedTxIds(new Set(filteredTransactions.map((t) => t.id)));
     }
-  }, [showCustomAlert]);
+  };
 
-  // Client-side tier filter — instant, no network call
-  const filteredItems = useMemo(
-    () => (tierFilter ? items.filter((i) => i.tier === tierFilter) : items),
-    [items, tierFilter]
-  );
-
-
-
-  // Group wishlist items by categories for Nothing OS Folders
-  const folderData = useMemo(() => {
-    const grouped: Record<string, WishlistItem[]> = {};
-    
-    // Sort items by created_at DESC
-    const sortedItems = [...filteredItems].sort(
-      (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+  const handleConfirmBulkDelete = () => {
+    if (selectedTxIds.size === 0) return;
+    const count = selectedTxIds.size;
+    Alert.alert(
+      'Bulk Delete',
+      `Permanently delete ${count} selected transaction${count > 1 ? 's' : ''}?`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: `Delete ${count}`,
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              Vibration.vibrate(60);
+              await bulkDeleteTransactions(Array.from(selectedTxIds));
+              setSelectedTxIds(new Set());
+              setIsSelectMode(false);
+              Alert.alert('Deleted', `${count} transactions deleted.`);
+            } catch (e: any) {
+              Alert.alert('Error', e.message || 'Bulk delete failed');
+            }
+          },
+        },
+      ]
     );
+  };
 
-    for (const item of sortedItems) {
-      const cat = item.category || 'Other';
-      if (!grouped[cat]) grouped[cat] = [];
-      grouped[cat].push(item);
+  // ─── Bulk Add Handlers ──────────────────────────────────────────────────────
+  const handleOpenBulkAdd = () => {
+    const defaultCatId = categories[0]?.id || '';
+    setBulkDrafts([
+      { id: '1', amount: '', category_id: defaultCatId, note: '' },
+      { id: '2', amount: '', category_id: defaultCatId, note: '' },
+      { id: '3', amount: '', category_id: defaultCatId, note: '' },
+    ]);
+    setShowBulkAddModal(true);
+  };
+
+  const handleAddBulkRow = () => {
+    const defaultCatId = categories[0]?.id || '';
+    setBulkDrafts((prev) => [
+      ...prev,
+      { id: String(Date.now()), amount: '', category_id: defaultCatId, note: '' },
+    ]);
+  };
+
+  const handleQuickAddPreset = (note: string, amount: number, catNameHint: string) => {
+    const foundCat = categories.find((c) =>
+      c.name.toLowerCase().includes(catNameHint.toLowerCase())
+    ) || categories[0];
+    const catId = foundCat ? foundCat.id : '';
+
+    setBulkDrafts((prev) => [
+      ...prev,
+      {
+        id: String(Date.now()),
+        amount: String(amount),
+        category_id: catId,
+        note,
+      },
+    ]);
+  };
+
+  const handleSaveBulkAdd = async () => {
+    const validItems = bulkDrafts
+      .map((d) => ({
+        amount: parseFloat(d.amount),
+        category_id: d.category_id,
+        note: d.note.trim() || null,
+        type: 'expense' as const,
+      }))
+      .filter((item) => !isNaN(item.amount) && item.amount > 0 && item.category_id);
+
+    if (validItems.length === 0) {
+      Alert.alert('No Valid Entries', 'Please enter at least one expense with amount and category.');
+      return;
     }
 
-    // Use persisted order, filter out hidden categories
-    const visibleOrder = categoryOrder.filter((cat) => !hiddenCategories.has(cat));
-    return visibleOrder.map((cat, index) => ({
-      id: cat,
-      category: cat,
-      items: grouped[cat] || [],
-      indexStr: String(index + 1).padStart(2, '0'),
-    }));
-  }, [filteredItems, categoryOrder, hiddenCategories]);
+    setIsSubmittingBulkAdd(true);
+    try {
+      await bulkAddTransactions(validItems);
+      setShowBulkAddModal(false);
+      Alert.alert('Bulk Added', `Successfully logged ${validItems.length} expenses.`);
+    } catch (e: any) {
+      Alert.alert('Error', e.message || 'Bulk add failed');
+    } finally {
+      setIsSubmittingBulkAdd(false);
+    }
+  };
 
-  // Stats use ALL items (not filtered), so totals are always accurate
-  const totalCount = items.length;
-  const doneCount = items.filter((i) => i.done).length;
-  const progressPercent = totalCount > 0 ? (doneCount / totalCount) * 100 : 0;
+  // Filtered & Grouped Transactions
+  const filteredTransactions = useMemo(() => {
+    return transactions.filter((t) => {
+      if (filterType === 'expense' && t.type !== 'expense') return false;
+      if (filterType === 'income' && t.type !== 'income') return false;
+      if (selectedCatId && t.category_id !== selectedCatId) return false;
+      return true;
+    });
+  }, [transactions, filterType, selectedCatId]);
+
+  const groupedTransactions = useMemo(() => {
+    const groups: Record<GroupKey, Transaction[]> = {
+      Today: [],
+      Yesterday: [],
+      'This Week': [],
+      Earlier: [],
+    };
+
+    filteredTransactions.forEach((tx) => {
+      const key = getGroupKey(tx.occurred_at);
+      groups[key].push(tx);
+    });
+
+    return groups;
+  }, [filteredTransactions]);
 
   return (
-    <View style={[styles.screen, { paddingTop: insets.top + 16 }]}>
-      {/* Header Info */}
-      <View style={styles.header}>
-        <View>
-          <Text style={styles.eyebrow}>DREAMLIST</Text>
-          <Text style={styles.title}>Dashboard</Text>
-        </View>
-        {totalCount > 0 && (
-          <View style={styles.headerBadge}>
-            <Text style={styles.headerBadgeText}>
-              {doneCount}/{totalCount} ACQUIRED
-            </Text>
+    <View style={[styles.container, { paddingTop: insets.top }]}>
+      {/* Ambient Decorative Background Glows for Luminous Depth */}
+      <View style={styles.ambientGlowTopLeft} pointerEvents="none" />
+      <View style={styles.ambientGlowTopRight} pointerEvents="none" />
+
+      <ScrollView
+        contentContainerStyle={styles.scrollContent}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={DL.muted} />}
+        showsVerticalScrollIndicator={false}
+      >
+        {/* Top Header: Generous Breathing Room & Month Picker (Like Screenshot) */}
+        <View style={styles.topHeader}>
+          <View style={styles.headerLeft}>
+            <View style={styles.avatarCircle}>
+              <Text style={styles.avatarText}>DL</Text>
+            </View>
+            <View>
+              <Text style={styles.headerGreeting}>WELCOME BACK</Text>
+              <Pressable
+                style={({ pressed }) => [styles.monthPickerBtn, pressed && styles.btnPressed]}
+                onPress={() => {
+                  Vibration.vibrate(12);
+                  setShowMonthModal(true);
+                }}
+                hitSlop={8}
+              >
+                <Text style={styles.monthPickerText}>{formattedMonth}</Text>
+                <Text style={styles.monthPickerCaret}>▾</Text>
+              </Pressable>
+            </View>
           </View>
-        )}
-      </View>
 
-      {/* Progress Bar Header (Segmented/dashed blocks) */}
-      {totalCount > 0 && (
-        <View style={styles.progressContainer}>
-          <View style={styles.segmentedProgressBar}>
-            {Array.from({ length: numSegments }).map((_, i) => {
-              const threshold = (i / numSegments) * 100;
-              const isFilled = progressPercent > threshold;
-              return (
-                <View
-                  key={i}
-                  style={[
-                    styles.progressSegment,
-                    {
-                      backgroundColor: isFilled ? DL.soon : DL.border,
-                    },
-                  ]}
-                />
-              );
-            })}
-          </View>
-        </View>
-      )}
+          <View style={styles.headerRight}>
+            <View style={styles.stepperCapsule}>
+              <Pressable
+                style={({ pressed }) => [styles.stepperArrow, pressed && styles.btnPressed]}
+                onPress={() => {
+                  Vibration.vibrate(10);
+                  handlePrevMonth();
+                }}
+                hitSlop={8}
+              >
+                <ChevronLeftIcon color="#0F172A" size={14} />
+              </Pressable>
+              <View style={styles.stepperDivider} />
+              <Pressable
+                style={({ pressed }) => [styles.stepperArrow, pressed && styles.btnPressed]}
+                onPress={() => {
+                  Vibration.vibrate(10);
+                  handleNextMonth();
+                }}
+                hitSlop={8}
+              >
+                <ChevronRightIcon color="#0F172A" size={14} />
+              </Pressable>
+            </View>
 
-      {/* Filter chips + Edit toggle */}
-      <View style={styles.chipWrapper}>
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          contentContainerStyle={styles.chipRow}
-          style={styles.chipScroll}
-        >
-          <FilterChip
-            label="All"
-            active={tierFilter === null}
-            color={DL.text}
-            onPress={() => setTierFilter(null)}
-          />
-          {TIERS.map((t) => (
-            <FilterChip
-              key={t}
-              label={t.charAt(0).toUpperCase() + t.slice(1)}
-              active={tierFilter === t}
-              color={TIER_COLOR[t]}
-              onPress={() => setTierFilter(tierFilter === t ? null : t)}
-            />
-          ))}
-        </ScrollView>
-        <Pressable
-          style={[styles.editToggleBtn, editMode && styles.editToggleBtnActive]}
-          onPress={() => setEditMode((v) => !v)}
-        >
-          <Text style={[styles.editToggleBtnText, editMode && styles.editToggleBtnTextActive]}>
-            {editMode ? 'DONE' : 'EDIT'}
-          </Text>
-        </Pressable>
-      </View>
-
-      {/* Content Area */}
-      {loading ? (
-        <View style={styles.centered}>
-          <ActivityIndicator color={DL.muted} size="large" />
-        </View>
-      ) : items.length === 0 ? (
-        <View style={styles.centered}>
-          <View style={styles.emptyCard}>
-            <Text style={styles.emptyIcon}>✨</Text>
-            <Text style={styles.emptyTitle}>Curate Your Wants</Text>
-            <Text style={styles.emptyText}>
-              No items matching your criteria yet. Add items and let AI research prices, specs, and details!
-            </Text>
             <Pressable
-              onPress={() => router.push('/add')}
               style={({ pressed }) => [
-                styles.emptyButton,
-                pressed && { opacity: 0.8 },
+                styles.headerIconBtn,
+                isSelectMode && styles.headerIconBtnActive,
+                pressed && styles.btnPressed,
               ]}
+              onPress={() => {
+                Vibration.vibrate(12);
+                setIsSelectMode(!isSelectMode);
+                setSelectedTxIds(new Set());
+              }}
+              hitSlop={8}
             >
-              <Text style={styles.emptyButtonText}>Add Your First Item</Text>
+              <LayersIcon color={isSelectMode ? '#FFFFFF' : '#0F172A'} size={17} />
             </Pressable>
           </View>
         </View>
-      ) : (
-        <ScrollView
-          ref={scrollableRef}
-          style={styles.scrollArea}
-          contentContainerStyle={[
-            styles.scrollContent,
-            { paddingBottom: insets.bottom + 80 },
-          ]}
-          refreshControl={
-            <RefreshControl
-              refreshing={refreshing}
-              onRefresh={onRefresh}
-              tintColor={DL.muted}
-              colors={[DL.now, DL.soon, DL.dream]}
-              progressBackgroundColor={DL.card}
-            />
-          }
-        >
-          {editMode ? (
-            <Sortable.Flex
-              scrollableRef={scrollableRef}
-              flexDirection="row"
-              flexWrap="wrap"
-              gap={8}
-              onDragEnd={({ order }) => {
-                const visibleCats = folderData.map((f) => f.category);
-                const sortedVisible = order(visibleCats);
-                const completeOrder = [
-                  ...sortedVisible,
-                  ...categoryOrder.filter((c) => !visibleCats.includes(c)),
-                ];
-                saveCategoryOrder(completeOrder);
-              }}
-              dragActivationDelay={150}
-              activeItemScale={1.04}
-              activeItemOpacity={0.9}
-              activeItemShadowOpacity={0.25}
-              inactiveItemScale={0.98}
-              inactiveItemOpacity={0.7}
-              hapticsEnabled={true}
-            >
-              {folderData.map((folder) => {
-                const size = cardSizes[folder.category] || 'medium';
-                const isWide = size === 'wide';
-                const itemWidth = isWide ? wideCardWidth : cardWidth;
 
-                return (
-                  <Sortable.Touchable
-                    key={folder.category}
+        {/* ─── Hero Credit Card: Exact Replica of Picture 2 ─── */}
+        <View style={styles.cardContainer}>
+          <LinearGradient
+            colors={DL.cardGradient}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 1 }}
+            style={styles.heroCardGradient}
+          >
+            {/* Ambient glossy curved orb inside card */}
+            <View style={styles.cardInternalOrb} />
+
+            {/* Top Row: Bank Name + Debit Badge */}
+            <View style={styles.heroCardTop}>
+              <Text style={styles.cardBankName}>DreamList Bank</Text>
+              <View style={styles.cardDebitBadge}>
+                <Text style={styles.cardDebitText}>Debit</Text>
+              </View>
+            </View>
+
+            {/* Balance Display */}
+            <View style={styles.heroCardBalanceWrap}>
+              <Text style={styles.heroCardBalance}>
+                ₹{Math.round(budgetState.remaining).toLocaleString('en-IN')}
+              </Text>
+              <Text style={styles.cardMaskedNumber}>•••• 0125 •••••••• 76362</Text>
+            </View>
+
+            {/* Bottom Row: VISA Logo + Contactless Icon + Expiry Date */}
+            <View style={styles.heroCardBottom}>
+              <Text style={styles.visaText}>VISA</Text>
+              <View style={styles.heroCardBottomRight}>
+                <Text style={styles.cardExpVal}>
+                  Exp {activeMonth ? `${activeMonth.split('-')[1]}/${activeMonth.split('-')[0].slice(2)}` : '05/29'}
+                </Text>
+                <ContactlessIcon color="#FFFFFF" size={18} />
+              </View>
+            </View>
+          </LinearGradient>
+
+          {/* Underlay frosted peek edge (stacked 3D credit card look from pic 2) */}
+          <View style={styles.cardUnderlay} />
+        </View>
+
+        {/* ─── Quick Actions Row (modeled on picture 2) ─── */}
+        <View style={styles.quickActionsCard}>
+          {/* 1. Insights / Analytics */}
+          <Pressable
+            style={({ pressed }) => [styles.quickActionBtn, pressed && styles.btnPressed]}
+            onPress={() => {
+              Vibration.vibrate(12);
+              router.push('/expenses/insights');
+            }}
+            hitSlop={6}
+          >
+            <View style={styles.quickActionCircle}>
+              <AnalyticsIcon color="#2563EB" size={19} />
+            </View>
+            <Text style={styles.quickActionLabel}>Insights</Text>
+          </Pressable>
+
+          {/* 2. LOG SPEND (Prominent Center Button with Cyan-Purple Gradient) */}
+          <Pressable
+            style={({ pressed }) => [styles.quickCenterActionBtn, pressed && styles.btnPressed]}
+            onPress={() => {
+              Vibration.vibrate(20);
+              router.push('/expenses/transaction');
+            }}
+            hitSlop={6}
+          >
+            <LinearGradient
+              colors={DL.cardGradient}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 1 }}
+              style={styles.quickCenterCircle}
+            >
+              <PlusIcon color="#FFFFFF" size={24} />
+            </LinearGradient>
+            <Text style={styles.quickCenterLabel}>LOG SPEND</Text>
+          </Pressable>
+
+          {/* 3. Envelopes / Category Targets */}
+          <Pressable
+            style={({ pressed }) => [styles.quickActionBtn, pressed && styles.btnPressed]}
+            onPress={() => {
+              Vibration.vibrate(12);
+              router.push('/expenses/categories');
+            }}
+            hitSlop={6}
+          >
+            <View style={styles.quickActionCircle}>
+              <TargetIcon color="#2563EB" size={19} />
+            </View>
+            <Text style={styles.quickActionLabel}>Envelopes</Text>
+          </Pressable>
+
+          {/* 4. Bulk Add */}
+          <Pressable
+            style={({ pressed }) => [styles.quickActionBtn, pressed && styles.btnPressed]}
+            onPress={() => {
+              Vibration.vibrate(12);
+              handleOpenBulkAdd();
+            }}
+            hitSlop={6}
+          >
+            <View style={styles.quickActionCircle}>
+              <LayersIcon color="#2563EB" size={17} />
+            </View>
+            <Text style={styles.quickActionLabel}>Bulk Add</Text>
+          </Pressable>
+        </View>
+
+        {/* 1-Step Quick Vault Pill */}
+        <View style={styles.vaultPillCard}>
+          <View style={styles.vaultLeft}>
+            <ShieldLockIcon color="#2563EB" size={18} />
+            <View>
+              <Text style={styles.vaultPillTitle}>VAULT RESERVE</Text>
+              <Text style={styles.vaultPillBalance}>
+                ₹{Math.round(vaultBalance).toLocaleString('en-IN')}
+              </Text>
+            </View>
+          </View>
+
+          <View style={styles.vaultPillActions}>
+            <Pressable
+              style={({ pressed }) => [styles.vaultPillMore, pressed && styles.btnPressed]}
+              onPress={() => {
+                Vibration.vibrate(10);
+                router.push('/(tabs)/vault');
+              }}
+            >
+              <Text style={styles.vaultPillMoreText}>OPEN VAULT →</Text>
+            </Pressable>
+          </View>
+        </View>
+
+        {/* ─── Spend Analysis (Spaced-Out Rounded Bubbles from Pictures 1 & 2) ─── */}
+        <View style={styles.sectionHeaderWrap}>
+          <View>
+            <Text style={styles.sectionTitle}>SPEND ANALYSIS</Text>
+            <Text style={styles.sectionSubtitle}>
+              {selectedCatId ? 'Tap bubble to clear filter' : 'Tap category to filter transactions'}
+            </Text>
+          </View>
+          {selectedCatId && (
+            <Pressable
+              style={({ pressed }) => [styles.clearFilterBtn, pressed && styles.btnPressed]}
+              onPress={() => {
+                Vibration.vibrate(10);
+                setSelectedCatId(null);
+              }}
+            >
+              <Text style={styles.clearFilterText}>SHOW ALL</Text>
+            </Pressable>
+          )}
+        </View>
+
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={styles.envelopeScrollList}
+        >
+          {budgetState.categories.map((catStatus) => {
+            const isSelected = selectedCatId === catStatus.category_id;
+            const pct = catStatus.limit > 0 ? Math.min(100, Math.round((catStatus.spent / catStatus.limit) * 100)) : 0;
+            const categoryMeta = categories.find((c) => c.id === catStatus.category_id);
+
+            return (
+              <Pressable
+                key={catStatus.category_id}
+                style={({ pressed }) => [
+                  styles.envelopeCard,
+                  isSelected && styles.envelopeCardSelected,
+                  pressed && styles.btnPressed,
+                ]}
+                onPress={() => {
+                  Vibration.vibrate(10);
+                  setSelectedCatId(isSelected ? null : catStatus.category_id);
+                }}
+              >
+                <View style={styles.bubbleCircle}>
+                  <CategoryIcon
+                    icon={categoryMeta?.icon}
+                    name={catStatus.category_name}
+                    size={36}
+                    fontSize={18}
+                  />
+                </View>
+                <Text style={styles.envelopeCardSpent}>
+                  ₹{Math.round(catStatus.spent).toLocaleString('en-IN')}
+                </Text>
+                <Text style={styles.envelopeCardName} numberOfLines={1}>
+                  {catStatus.category_name}
+                </Text>
+                {catStatus.limit > 0 && (
+                  <View style={styles.miniTrack}>
+                    <View
+                      style={[
+                        styles.miniBar,
+                        {
+                          width: `${pct}%`,
+                          backgroundColor: catStatus.isOverspent
+                            ? '#EF4444'
+                            : pct > 80
+                            ? '#F59E0B'
+                            : '#2563EB',
+                        },
+                      ]}
+                    />
+                  </View>
+                )}
+              </Pressable>
+            );
+          })}
+        </ScrollView>
+
+        {/* ─── Transactions Header & Filters (Modeled on Screenshot) ─── */}
+        <View style={styles.streamSectionHeader}>
+          <View>
+            <Text style={styles.transactionsMainTitle}>Transactions</Text>
+            <Text style={styles.transactionsSubCount}>
+              {filteredTransactions.length} items logged
+            </Text>
+          </View>
+
+          {isSelectMode ? (
+            <Pressable
+              style={({ pressed }) => [styles.selectAllBtn, pressed && styles.btnPressed]}
+              onPress={() => {
+                Vibration.vibrate(12);
+                handleSelectAll();
+              }}
+            >
+              <Text style={styles.selectAllText}>
+                {selectedTxIds.size === filteredTransactions.length ? 'DESELECT ALL' : 'SELECT ALL'}
+              </Text>
+            </Pressable>
+          ) : (
+            <View style={styles.filterPillGroup}>
+              {(['all', 'expense', 'income'] as const).map((type) => (
+                <Pressable
+                  key={type}
+                  style={({ pressed }) => [
+                    styles.filterPill,
+                    filterType === type && styles.filterPillActive,
+                    pressed && styles.btnPressed,
+                  ]}
+                  onPress={() => {
+                    Vibration.vibrate(10);
+                    setFilterType(type);
+                  }}
+                >
+                  <Text
                     style={[
-                      styles.folderCard,
-                      folder.items.length === 0 && styles.folderCardEmpty,
-                      { width: itemWidth }
+                      styles.filterPillText,
+                      filterType === type && styles.filterPillTextActive,
                     ]}
                   >
-                    <FolderCard
-                      folder={folder}
-                      editMode={true}
-                      size={size}
-                      width="100%"
-                      onPressItem={(i: WishlistItem) => handlePressCard(i)}
-                      onToggleDone={handleToggleDone}
-                      onPressCard={() => {}}
-                      onHide={() => handleHideCategory(folder.category)}
-                      onSizeChange={handleSizeChange}
-                    />
-                  </Sortable.Touchable>
-                );
-              })}
-            </Sortable.Flex>
-          ) : (
-            <Reanimated.View layout={ReanimatedLayoutTransition}>
-              {layoutSections.map((sec, secIdx) => {
-                if (sec.type === 'wide') {
-                  const folder = folderData.find((f) => f.category === sec.category);
-                  if (!folder) return null;
-                  return (
-                    <Reanimated.View 
-                      key={sec.category} 
-                      layout={ReanimatedLayoutTransition}
-                      style={{ marginBottom: 12 }}
-                    >
-                      <FolderCard
-                        folder={folder}
-                        editMode={false}
-                        size="wide"
-                        width="100%"
-                        onPressItem={(i: WishlistItem) => handlePressCard(i)}
-                        onToggleDone={handleToggleDone}
-                        onPressCard={() => router.push(`/category/${folder.category}` as any)}
-                        onLongPressCard={() => setEditMode(true)}
-                        onHide={() => {}}
-                        onLayout={(e) => handleCardHeightChange(folder.category, e.nativeEvent.layout.height)}
-                        onSizeChange={handleSizeChange}
-                      />
-                    </Reanimated.View>
-                  );
-                } else {
-                  return (
-                    <Reanimated.View 
-                      key={`grid-${secIdx}`} 
-                      layout={ReanimatedLayoutTransition}
-                      style={styles.gridSectionRow}
-                    >
-                      <View style={[styles.masonryColumn, { width: cardWidth }]}>
-                        {sec.left.map((cat) => {
-                          const folder = folderData.find((f) => f.category === cat);
-                          if (!folder) return null;
-                          return (
-                            <Reanimated.View 
-                              key={cat} 
-                              layout={ReanimatedLayoutTransition}
-                              style={{ width: '100%', marginBottom: 12 }}
-                            >
-                              <FolderCard
-                                folder={folder}
-                                editMode={false}
-                                size={cardSizes[cat] || 'medium'}
-                                width="100%"
-                                onPressItem={(i: WishlistItem) => handlePressCard(i)}
-                                onToggleDone={handleToggleDone}
-                                onPressCard={() => router.push(`/category/${folder.category}` as any)}
-                                onLongPressCard={() => setEditMode(true)}
-                                onHide={() => {}}
-                                onLayout={(e) => handleCardHeightChange(folder.category, e.nativeEvent.layout.height)}
-                                onSizeChange={handleSizeChange}
-                              />
-                            </Reanimated.View>
-                          );
-                        })}
-                      </View>
-                      <View style={[styles.masonryColumn, { width: cardWidth }]}>
-                        {sec.right.map((cat) => {
-                          const folder = folderData.find((f) => f.category === cat);
-                          if (!folder) return null;
-                          return (
-                            <Reanimated.View 
-                              key={cat} 
-                              layout={ReanimatedLayoutTransition}
-                              style={{ width: '100%', marginBottom: 12 }}
-                            >
-                              <FolderCard
-                                folder={folder}
-                                editMode={false}
-                                size={cardSizes[cat] || 'medium'}
-                                width="100%"
-                                onPressItem={(i: WishlistItem) => handlePressCard(i)}
-                                onToggleDone={handleToggleDone}
-                                onPressCard={() => router.push(`/category/${folder.category}` as any)}
-                                onLongPressCard={() => setEditMode(true)}
-                                onHide={() => {}}
-                                onLayout={(e) => handleCardHeightChange(folder.category, e.nativeEvent.layout.height)}
-                                onSizeChange={handleSizeChange}
-                              />
-                            </Reanimated.View>
-                          );
-                        })}
-                      </View>
-                    </Reanimated.View>
-                  );
-                }
-              })}
-            </Reanimated.View>
+                    {type.toUpperCase()}
+                  </Text>
+                </Pressable>
+              ))}
+            </View>
           )}
-        </ScrollView>
-      )}
+        </View>
 
-      {/* Floating Action Button (FAB) to Add Wishlist Item */}
-      {!editMode && (
+        {/* Grouped Transactions Stream */}
+        {(['Today', 'Yesterday', 'This Week', 'Earlier'] as GroupKey[]).map((groupKey) => {
+          const list = groupedTransactions[groupKey];
+          if (!list || list.length === 0) return null;
+
+          return (
+            <View key={groupKey} style={styles.groupContainer}>
+              <Text style={styles.groupHeader}>{groupKey.toUpperCase()}</Text>
+              {list.map((tx) => (
+                <TransactionRow
+                  key={tx.id}
+                  tx={tx}
+                  isSelectMode={isSelectMode}
+                  isSelected={selectedTxIds.has(tx.id)}
+                  onToggleSelect={toggleSelectTx}
+                  onPress={handleTxPress}
+                  onLongPress={handleTxLongPress}
+                  onDuplicate={handleDuplicate}
+                  onDelete={handleDelete}
+                />
+              ))}
+            </View>
+          );
+        })}
+
+        {isLoading && (
+          <View style={styles.loadingBanner}>
+            <ActivityIndicator size="small" color="#2563EB" />
+            <Text style={styles.loadingBannerText}>Updating month data...</Text>
+          </View>
+        )}
+
+        {transactions.length === 0 && !isLoading && (
+          <View style={styles.emptyState}>
+            <Text style={styles.emptyIcon}>💳</Text>
+            <Text style={styles.emptyTitle}>No Transactions Logged</Text>
+            <Text style={styles.emptySubtitle}>
+              Tap LOG SPEND or Bulk Add to log your spending for {formattedMonth}.
+            </Text>
+          </View>
+        )}
+
+        <View style={{ height: 140 }} />
+      </ScrollView>
+
+      {/* Floating Quick Log Spend Button (Floats right above the floating nav bar) */}
+      {!isSelectMode && (
         <Pressable
           style={({ pressed }) => [
-            styles.fab,
-            pressed && { opacity: 0.9, transform: [{ scale: 0.95 }] }
+            styles.floatingQuickLogBtn,
+            pressed && { transform: [{ scale: 0.94 }], opacity: 0.9 },
           ]}
-          onPress={() => router.push('/add')}
+          onPress={() => {
+            Vibration.vibrate(15);
+            router.push('/expenses/transaction');
+          }}
+          hitSlop={10}
         >
-          <Text style={styles.fabText}>+</Text>
+          <LinearGradient
+            colors={DL.cardGradient}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 1 }}
+            style={styles.floatingQuickLogGradient}
+          >
+            <PlusIcon color="#FFFFFF" size={17} />
+            <Text style={styles.floatingQuickLogText}>LOG SPEND</Text>
+          </LinearGradient>
         </Pressable>
       )}
 
-      {/* Custom Dark Theme Alert Modal */}
-      {customAlert && (
-        <Modal
-          visible={!!customAlert}
-          transparent={true}
-          animationType="fade"
-          onRequestClose={() => setCustomAlert(null)}
-        >
-          <View style={styles.alertOverlay}>
-            <View style={styles.alertBox}>
-              <Text style={styles.alertTitle}>{customAlert.title.toUpperCase()}</Text>
-              <Text style={styles.alertMessage}>{customAlert.message}</Text>
-              <View style={styles.alertButtonRow}>
-                {customAlert.buttons.map((btn, idx) => {
-                  const isDestructive = btn.style === 'destructive';
-                  const isCancel = btn.style === 'cancel';
-                  return (
-                    <Pressable
-                      key={idx}
-                      onPress={btn.onPress}
-                      style={({ pressed }) => [
-                        styles.alertButton,
-                        isDestructive && styles.alertBtnDestructive,
-                        isCancel && styles.alertBtnCancel,
-                        !isDestructive && !isCancel && styles.alertBtnDefault,
-                        pressed && { opacity: 0.8, transform: [{ scale: 0.97 }] }
-                      ]}
-                    >
-                      <Text
-                        style={[
-                          styles.alertButtonText,
-                          isDestructive && styles.alertBtnTextDestructive,
-                          isCancel && styles.alertBtnTextCancel,
-                          !isDestructive && !isCancel && styles.alertBtnTextDefault
-                        ]}
-                      >
-                        {btn.text}
-                      </Text>
-                    </Pressable>
-                  );
-                })}
+      {/* Bulk Delete Action Bar (floats above the floating tab bar during select mode) */}
+      {isSelectMode && (
+        <View style={styles.bulkActionBar}>
+          <Text style={styles.bulkCountText}>{selectedTxIds.size} Selected</Text>
+          <Pressable
+            style={({ pressed }) => [
+              styles.bulkDeleteBtn,
+              selectedTxIds.size === 0 && { opacity: 0.4 },
+              pressed && styles.btnPressed,
+            ]}
+            onPress={handleConfirmBulkDelete}
+            disabled={selectedTxIds.size === 0}
+          >
+            <TrashIcon color="#FFFFFF" size={16} />
+            <Text style={styles.bulkDeleteBtnText}>DELETE ({selectedTxIds.size})</Text>
+          </Pressable>
+        </View>
+      )}
+
+      {/* ─── Bulk Add Modal ──────────────────────────────────────────────── */}
+      <Modal visible={showBulkAddModal} transparent animationType="slide">
+        <View style={styles.modalOverlay}>
+          <View style={[styles.modalCard, { maxHeight: '86%' }]}>
+            <View style={styles.modalHeaderRow}>
+              <View>
+                <Text style={styles.modalTitle}>BULK LOG EXPENSES</Text>
+                <Text style={styles.modalSub}>Log several expenses at once in seconds.</Text>
               </View>
+              <Pressable
+                style={styles.modalCloseBtn}
+                onPress={() => setShowBulkAddModal(false)}
+              >
+                <Text style={styles.modalCloseText}>✕</Text>
+              </Pressable>
+            </View>
+
+            {/* Quick Presets Row */}
+            <Text style={styles.presetHeading}>QUICK TAP PRESETS</Text>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.presetScroll}>
+              <Pressable
+                style={styles.presetPill}
+                onPress={() => handleQuickAddPreset('Coffee', 120, 'food')}
+              >
+                <Text style={styles.presetPillText}>☕ Coffee ₹120</Text>
+              </Pressable>
+              <Pressable
+                style={styles.presetPill}
+                onPress={() => handleQuickAddPreset('Lunch', 280, 'food')}
+              >
+                <Text style={styles.presetPillText}>🍔 Lunch ₹280</Text>
+              </Pressable>
+              <Pressable
+                style={styles.presetPill}
+                onPress={() => handleQuickAddPreset('Commute', 80, 'transport')}
+              >
+                <Text style={styles.presetPillText}>🚇 Commute ₹80</Text>
+              </Pressable>
+              <Pressable
+                style={styles.presetPill}
+                onPress={() => handleQuickAddPreset('Grocery', 450, 'food')}
+              >
+                <Text style={styles.presetPillText}>🛒 Grocery ₹450</Text>
+              </Pressable>
+              <Pressable
+                style={styles.presetPill}
+                onPress={() => handleQuickAddPreset('Snacks', 150, 'food')}
+              >
+                <Text style={styles.presetPillText}>🍿 Snacks ₹150</Text>
+              </Pressable>
+            </ScrollView>
+
+            {/* Draft Rows Table */}
+            <ScrollView style={{ marginTop: 8 }} showsVerticalScrollIndicator={false}>
+              {bulkDrafts.map((draft, idx) => (
+                <View key={draft.id} style={styles.bulkRow}>
+                  <Text style={styles.bulkRowIdx}>#{idx + 1}</Text>
+                  <TextInput
+                    style={styles.bulkAmountInput}
+                    keyboardType="numeric"
+                    placeholder="₹ Amount"
+                    placeholderTextColor="#6B7280"
+                    value={draft.amount}
+                    onChangeText={(val) => {
+                      setBulkDrafts((prev) =>
+                        prev.map((d) => (d.id === draft.id ? { ...d, amount: val } : d))
+                      );
+                    }}
+                  />
+                  <TextInput
+                    style={styles.bulkNoteInput}
+                    placeholder="Note (e.g. Lunch)"
+                    placeholderTextColor="#6B7280"
+                    value={draft.note}
+                    onChangeText={(val) => {
+                      setBulkDrafts((prev) =>
+                        prev.map((d) => (d.id === draft.id ? { ...d, note: val } : d))
+                      );
+                    }}
+                  />
+                  {/* Remove row button */}
+                  {bulkDrafts.length > 1 && (
+                    <Pressable
+                      style={styles.bulkRemoveBtn}
+                      onPress={() => {
+                        setBulkDrafts((prev) => prev.filter((d) => d.id !== draft.id));
+                      }}
+                    >
+                      <Text style={styles.bulkRemoveText}>✕</Text>
+                    </Pressable>
+                  )}
+                </View>
+              ))}
+
+              <Pressable style={styles.addMoreRowBtn} onPress={handleAddBulkRow}>
+                <Text style={styles.addMoreRowText}>+ ADD ANOTHER ROW</Text>
+              </Pressable>
+            </ScrollView>
+
+            <View style={styles.modalBtnRow}>
+              <Pressable style={styles.cancelBtn} onPress={() => setShowBulkAddModal(false)}>
+                <Text style={styles.cancelBtnText}>CANCEL</Text>
+              </Pressable>
+              <Pressable
+                style={[styles.submitBtn, isSubmittingBulkAdd && { opacity: 0.6 }]}
+                onPress={handleSaveBulkAdd}
+                disabled={isSubmittingBulkAdd}
+              >
+                {isSubmittingBulkAdd ? (
+                  <ActivityIndicator color="#000" />
+                ) : (
+                  <Text style={styles.submitBtnText}>SAVE ALL</Text>
+                )}
+              </Pressable>
             </View>
           </View>
-        </Modal>
-      )}
+        </View>
+      </Modal>
+
+      {/* ─── Month Navigation & Fresh Start Modal ───────────────────────── */}
+      <Modal
+        visible={showMonthModal}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setShowMonthModal(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalCard}>
+            <View style={styles.modalHeaderRow}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                <CalendarIcon color="#10B981" size={20} />
+                <Text style={styles.modalTitle}>MONTH & FRESH START</Text>
+              </View>
+              <Pressable
+                style={styles.modalCloseBtn}
+                onPress={() => setShowMonthModal(false)}
+                hitSlop={10}
+              >
+                <Text style={styles.modalCloseText}>✕</Text>
+              </Pressable>
+            </View>
+
+            {/* Current View Info */}
+            <View style={styles.monthStatusBox}>
+              <Text style={styles.monthStatusLabel}>CURRENTLY VIEWING</Text>
+              <Text style={styles.monthStatusMonth}>{formattedMonth}</Text>
+              <View style={styles.monthStatPillsRow}>
+                <View style={styles.monthStatPill}>
+                  <Text style={styles.monthStatPillLabel}>TRANSACTIONS</Text>
+                  <Text style={styles.monthStatPillVal}>{transactions.length} items</Text>
+                </View>
+                <View style={styles.monthStatPill}>
+                  <Text style={styles.monthStatPillLabel}>SPENT</Text>
+                  <Text style={styles.monthStatPillVal}>
+                    ₹{Math.round(budgetState.spent).toLocaleString('en-IN')}
+                  </Text>
+                </View>
+              </View>
+            </View>
+
+            {/* Quick Month Switch Buttons */}
+            <Text style={styles.sectionModalLabel}>SWITCH MONTH</Text>
+            <View style={styles.quickJumpRow}>
+              <Pressable style={styles.quickJumpBtn} onPress={() => handleJumpToMonth(-1)}>
+                <Text style={styles.quickJumpBtnText}>‹ PREV</Text>
+              </Pressable>
+              <Pressable
+                style={[styles.quickJumpBtn, styles.quickJumpBtnActive]}
+                onPress={() => handleJumpToMonth(0)}
+              >
+                <Text style={[styles.quickJumpBtnText, styles.quickJumpBtnActiveText]}>
+                  THIS MONTH
+                </Text>
+              </Pressable>
+              <Pressable style={styles.quickJumpBtn} onPress={() => handleJumpToMonth(1)}>
+                <Text style={styles.quickJumpBtnText}>NEXT ›</Text>
+              </Pressable>
+            </View>
+
+            {/* Fresh Start / Reset Section */}
+            <View style={styles.resetCard}>
+              <View style={styles.resetCardHeader}>
+                <TrashIcon color="#EF4444" size={16} />
+                <Text style={styles.resetCardTitle}>FRESH START / RESET</Text>
+              </View>
+              <Text style={styles.resetCardDesc}>
+                Stopped logging or want to restart fresh for {formattedMonth}? Wiping will delete all transactions and reset envelopes for this month.
+              </Text>
+              <Pressable
+                style={[styles.resetActionBtn, isResettingMonth && { opacity: 0.6 }]}
+                onPress={handleResetCurrentMonth}
+                disabled={isResettingMonth}
+              >
+                {isResettingMonth ? (
+                  <ActivityIndicator color="#FFFFFF" size="small" />
+                ) : (
+                  <Text style={styles.resetActionBtnText}>RESET & START FRESH FOR THIS MONTH</Text>
+                )}
+              </Pressable>
+            </View>
+
+            <Pressable style={styles.closeModalFullBtn} onPress={() => setShowMonthModal(false)}>
+              <Text style={styles.closeModalFullBtnText}>CLOSE</Text>
+            </Pressable>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  screen: {
+  container: {
     flex: 1,
-    backgroundColor: DL.bg,
+    backgroundColor: '#F0F4FC', // Luminous soft bluish-white canvas
   },
-  header: {
-    paddingHorizontal: 20,
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'flex-end',
-    marginBottom: 8,
+  ambientGlowTopLeft: {
+    position: 'absolute',
+    top: -30,
+    left: -40,
+    width: 220,
+    height: 220,
+    borderRadius: 110,
+    backgroundColor: 'rgba(6, 182, 212, 0.09)',
   },
-  eyebrow: {
-    fontSize: 10,
-    letterSpacing: 2.5,
-    color: DL.muted,
-    fontFamily: DLFonts.mono,
-    marginBottom: 2,
-    fontWeight: '500',
-  },
-  title: {
-    fontSize: 26,
-    fontWeight: '800',
-    color: DL.text,
-  },
-  headerBadge: {
-    borderColor: '#242830',
-    borderWidth: 1.2,
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 6,
-  },
-  headerBadgeText: {
-    fontSize: 9.5,
-    fontFamily: DLFonts.mono,
-    color: DL.text,
-    fontWeight: '700',
-    letterSpacing: 2,
-    textShadowColor: 'rgba(231, 233, 238, 0.3)',
-    textShadowOffset: { width: 0, height: 0 },
-    textShadowRadius: 3,
-  },
-  progressContainer: {
-    paddingHorizontal: 20,
-    marginBottom: 10,
-    marginTop: 6,
-  },
-  segmentedProgressBar: {
-    flexDirection: 'row',
-    justifyContent: 'flex-start',
-    gap: 3,
-    height: 4,
-    width: '100%',
-  },
-  progressSegment: {
-    width: 6,
-    height: 4,
-    borderRadius: 1,
-  },
-  chipWrapper: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 4,
-    paddingRight: 12,
-  },
-  chipScroll: {
-    flex: 1,
-  },
-  chipRow: {
-    paddingHorizontal: 20,
-    paddingVertical: 8,
-    gap: 6,
-  },
-  editToggleBtn: {
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: '#2A2F38',
-    backgroundColor: 'transparent',
-  },
-  editToggleBtnActive: {
-    backgroundColor: 'rgba(255, 51, 51, 0.12)',
-    borderColor: 'rgba(255, 51, 51, 0.4)',
-  },
-  editToggleBtnText: {
-    fontFamily: DLFonts.mono,
-    fontSize: 10,
-    fontWeight: '700',
-    color: '#5A6070',
-    letterSpacing: 0.5,
-  },
-  editToggleBtnTextActive: {
-    color: '#FF3333',
-  },
-  scrollArea: {
-    flex: 1,
+  ambientGlowTopRight: {
+    position: 'absolute',
+    top: 40,
+    right: -50,
+    width: 200,
+    height: 200,
+    borderRadius: 100,
+    backgroundColor: 'rgba(124, 58, 237, 0.08)',
   },
   scrollContent: {
-    paddingTop: 10,
-    paddingHorizontal: 12,
+    paddingHorizontal: 18,
+    paddingBottom: 24,
   },
-  draggableContainer: {
-    paddingHorizontal: 14,
+  btnPressed: {
+    opacity: 0.78,
+    transform: [{ scale: 0.97 }],
   },
-  folderCard: {
-    backgroundColor: DL.card,
-    borderColor: DL.border,
-    borderWidth: 1.2,
-    borderRadius: 24,
-    paddingVertical: 18,
-    paddingHorizontal: 12,
-    overflow: 'hidden',
+
+  // ─── Top Header: Clean, Airy & Spacious ──────────────────────────────
+  topHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 14,
+    paddingHorizontal: 2,
+    marginBottom: 4,
   },
-  folderCardEmpty: {
-    minHeight: 100,
+  headerLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
   },
-  folderCardDragging: {
-    opacity: 0.8,
-    transform: [{ scale: 1.03 }],
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 6,
-    elevation: 5,
-    borderColor: DL.soon,
-  },
-  editDeleteBadge: {
-    position: 'absolute',
-    top: -8,
-    left: -8,
-    width: 22,
-    height: 22,
-    borderRadius: 11,
-    backgroundColor: '#CC2222',
+  avatarCircle: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1.5,
+    borderColor: 'rgba(37, 99, 235, 0.15)',
+    alignItems: 'center',
     justifyContent: 'center',
-    alignItems: 'center',
-    zIndex: 10,
-    borderWidth: 2,
-    borderColor: DL.bg,
+    shadowColor: '#000000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 6,
+    elevation: 2,
   },
-  editDeleteBadgeText: {
-    color: '#FFFFFF',
-    fontSize: 10,
+  avatarText: {
+    fontFamily: DLFonts.mono,
+    fontSize: 13,
     fontWeight: '800',
-    lineHeight: 12,
+    color: '#2563EB',
   },
-  dragHandle: {
-    position: 'absolute',
-    top: 8,
-    right: 8,
-    padding: 4,
-    zIndex: 10,
+  headerGreeting: {
+    fontFamily: DLFonts.mono,
+    fontSize: 9,
+    letterSpacing: 1.2,
+    color: '#64748B',
+    fontWeight: '700',
   },
-  dragHandleDots: {
-    width: 10,
-    height: 14,
+  monthPickerBtn: {
     flexDirection: 'row',
-    flexWrap: 'wrap',
-    justifyContent: 'space-between',
-    alignContent: 'space-between',
-    gap: 2,
-  },
-  dragHandleDot: {
-    width: 3,
-    height: 3,
-    borderRadius: 1.5,
-    backgroundColor: '#5A6070',
-  },
-  folderHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 14,
+    gap: 4,
+    marginTop: 1,
   },
-  folderHeaderLeft: {
+  monthPickerText: {
+    fontSize: 16,
+    fontWeight: '800',
+    color: '#0F172A',
+    letterSpacing: -0.2,
+  },
+  monthPickerCaret: {
+    fontSize: 12,
+    color: '#64748B',
+    marginTop: 2,
+  },
+  headerRight: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
-    flex: 1,
   },
-  titleProgressContainer: {
-    flexDirection: 'column',
-    flex: 1,
-  },
-  folderIndex: {
-    fontFamily: DLFonts.mono,
-    fontSize: 11,
-    color: '#FF3333',
-    fontWeight: '700',
-    marginRight: 2,
-  },
-  folderTitle: {
-    fontFamily: DLFonts.mono,
-    fontSize: 11,
-    fontWeight: '700',
-    color: DL.text,
-    letterSpacing: 1.2,
-  },
-  folderCount: {
-    fontFamily: DLFonts.mono,
-    fontSize: 11,
-    color: DL.muted,
-    letterSpacing: 0.5,
-  },
-  miniProgressBarTrack: {
-    height: 2,
-    backgroundColor: '#1E222A',
-    borderRadius: 1,
-    marginTop: 5,
-    width: '80%',
-    maxWidth: 120,
-    overflow: 'hidden',
-  },
-  miniProgressBarFill: {
-    height: '100%',
-    backgroundColor: DL.soon,
-  },
-  sizePicker: {
-    flexDirection: 'row',
-    gap: 4,
-    alignItems: 'center',
-  },
-  sizePill: {
-    width: 20,
-    height: 20,
-    borderRadius: 4,
-    borderWidth: 1,
-    borderColor: '#2A2F38',
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: 'transparent',
-  },
-  sizePillActive: {
-    backgroundColor: DL.soon,
-    borderColor: DL.soon,
-  },
-  sizePillText: {
-    fontSize: 9,
-    fontFamily: DLFonts.mono,
-    color: DL.muted,
-    fontWeight: 'bold',
-  },
-  sizePillTextActive: {
-    color: '#0B0D10',
-  },
-  cardContent: {
-    flexDirection: 'column',
-  },
-  folderChecklist: {
-    flexDirection: 'column',
-  },
-  checklistRow: {
+  stepperCapsule: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingVertical: 6,
-  },
-  miniCheckboxHit: {
-    marginRight: 6,
-  },
-  miniCheckbox: {
-    width: 14,
-    height: 14,
-    borderRadius: 4,
-    borderWidth: 1.5,
-    borderColor: '#404550',
-    backgroundColor: 'transparent',
-    justifyContent: 'center',
-    alignItems: 'center',
-    flexShrink: 0,
-  },
-  miniCheckboxDone: {
-    backgroundColor: DL.soon,
-    borderColor: DL.soon,
-  },
-  miniCheckboxTick: {
-    width: 6,
-    height: 6,
-    borderRadius: 1.5,
-    backgroundColor: '#0B0D10',
-  },
-  miniNameHit: {
-    flex: 1,
-  },
-  miniListName: {
-    fontFamily: DLFonts.sans,
-    fontSize: 15,
-    color: DL.text,
-    letterSpacing: 0.1,
-    lineHeight: 22,
-    flexShrink: 1,
-  },
-  miniListNameDone: {
-    opacity: 0.35,
-    textDecorationLine: 'line-through',
-  },
-  researchingBadge: {
-    backgroundColor: 'rgba(168, 85, 247, 0.12)',
-    borderColor: 'rgba(168, 85, 247, 0.3)',
+    backgroundColor: '#FFFFFF',
+    borderRadius: 20,
     borderWidth: 1,
-    borderRadius: 4,
-    paddingHorizontal: 5,
-    paddingVertical: 1.5,
-    marginLeft: 4,
-  },
-  researchingBadgeText: {
-    fontFamily: DLFonts.mono,
-    fontSize: 9,
-    color: '#A855F7',
-    fontWeight: 'bold',
-  },
-  miniPriceText: {
-    fontFamily: DLFonts.mono,
-    fontSize: 12,
-    color: DL.text,
-    marginLeft: 4,
-    fontWeight: '600',
-  },
-  miniTierBadge: {
-    borderWidth: 1,
-    borderRadius: 4,
+    borderColor: 'rgba(0, 0, 0, 0.06)',
     paddingHorizontal: 4,
-    paddingVertical: 1,
-    marginLeft: 4,
-  },
-  miniTierBadgeText: {
-    fontFamily: DLFonts.mono,
-    fontSize: 8,
-    fontWeight: 'bold',
-  },
-  remainingRow: {
-    marginTop: 8,
-    alignItems: 'flex-start',
-  },
-  remainingText: {
-    fontFamily: DLFonts.mono,
-    fontSize: 9,
-    color: DL.muted,
-    letterSpacing: 0.5,
-  },
-  completedBadgeRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: 'rgba(74, 222, 128, 0.08)',
-    borderColor: 'rgba(74, 222, 128, 0.2)',
-    borderWidth: 1,
-    borderRadius: 6,
-    paddingHorizontal: 8,
     paddingVertical: 4,
-    alignSelf: 'flex-start',
-    marginTop: 2,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.04,
+    shadowRadius: 4,
+    elevation: 1,
   },
-  completedBadgeText: {
-    fontFamily: DLFonts.mono,
-    fontSize: 9,
-    fontWeight: '700',
-    color: '#4ADE80',
-    letterSpacing: 0.5,
-  },
-  emptyBadgeRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: 'rgba(90, 96, 112, 0.08)',
-    borderColor: 'rgba(90, 96, 112, 0.15)',
-    borderWidth: 1,
-    borderRadius: 6,
+  stepperArrow: {
     paddingHorizontal: 8,
-    paddingVertical: 4,
-    alignSelf: 'flex-start',
-    marginTop: 2,
+    paddingVertical: 5,
   },
-  emptyBadgeText: {
-    fontFamily: DLFonts.mono,
-    fontSize: 9,
-    fontWeight: '700',
-    color: '#5A6070',
-    letterSpacing: 0.5,
+  stepperDivider: {
+    width: 1,
+    height: 14,
+    backgroundColor: 'rgba(0, 0, 0, 0.08)',
   },
-  gridSectionRow: {
+  headerIconBtn: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: 'rgba(0, 0, 0, 0.06)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.04,
+    shadowRadius: 4,
+    elevation: 1,
+  },
+  headerIconBtnActive: {
+    backgroundColor: '#0F172A',
+    borderColor: '#0F172A',
+  },
+
+  // ─── Hero Credit Card: Exact Replica of Picture 2 ────────────────────
+  cardContainer: {
+    marginBottom: 22,
+  },
+  heroCardGradient: {
+    borderRadius: 22,
+    paddingHorizontal: 20,
+    paddingVertical: 18,
+    minHeight: 184,
+    justifyContent: 'space-between',
+    overflow: 'hidden',
+    position: 'relative',
+    shadowColor: '#4F46E5',
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.28,
+    shadowRadius: 18,
+    elevation: 8,
+  },
+  cardInternalOrb: {
+    position: 'absolute',
+    right: -25,
+    bottom: -35,
+    width: 150,
+    height: 150,
+    borderRadius: 75,
+    backgroundColor: 'rgba(255, 255, 255, 0.12)',
+  },
+  heroCardTop: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    width: '100%',
-  },
-  masonryColumn: {
-    flexDirection: 'column',
-  },
-  centered: {
-    flex: 1,
-    justifyContent: 'center',
     alignItems: 'center',
-    paddingHorizontal: 30,
   },
-  emptyCard: {
-    backgroundColor: DL.card,
-    borderColor: DL.border,
-    borderWidth: 1,
-    borderRadius: 14,
-    padding: 28,
-    alignItems: 'center',
-    width: '100%',
-    maxWidth: 340,
-  },
-  emptyIcon: {
-    fontSize: 32,
-    marginBottom: 12,
-  },
-  emptyTitle: {
-    fontSize: 17,
-    fontWeight: 'bold',
-    color: DL.text,
+  cardBankName: {
     fontFamily: DLFonts.sans,
-    marginBottom: 8,
-  },
-  emptyText: {
-    color: DL.muted,
     fontSize: 13,
-    textAlign: 'center',
-    lineHeight: 18,
-    fontFamily: DLFonts.sans,
-    marginBottom: 20,
-  },
-  emptyButton: {
-    backgroundColor: DL.text,
-    borderRadius: 8,
-    paddingVertical: 10,
-    paddingHorizontal: 18,
-  },
-  emptyButtonText: {
-    color: '#000000',
-    fontSize: 13,
-    fontWeight: 'bold',
-    fontFamily: DLFonts.sans,
-  },
-  // Custom Dark Alert Modal Styles
-  alertOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.75)',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  alertBox: {
-    width: 290,
-    backgroundColor: '#161822',
-    borderColor: '#242830',
-    borderWidth: 1.2,
-    borderRadius: 16,
-    padding: 20,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 10 },
-    shadowOpacity: 0.5,
-    shadowRadius: 15,
-    elevation: 10,
-  },
-  alertTitle: {
-    fontFamily: DLFonts.mono,
-    fontSize: 14,
-    fontWeight: 'bold',
-    color: DL.text,
-    marginBottom: 10,
+    fontWeight: '700',
+    color: '#FFFFFF',
     letterSpacing: 0.5,
   },
-  alertMessage: {
+  cardDebitBadge: {
+    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+    paddingHorizontal: 10,
+    paddingVertical: 3,
+    borderRadius: 12,
+  },
+  cardDebitText: {
     fontFamily: DLFonts.sans,
-    fontSize: 13,
-    color: DL.muted,
-    lineHeight: 18,
-    marginBottom: 20,
-  },
-  alertButtonRow: {
-    flexDirection: 'row',
-    justifyContent: 'flex-end',
-    gap: 10,
-  },
-  alertButton: {
-    paddingVertical: 8,
-    paddingHorizontal: 16,
-    borderRadius: 8,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  alertBtnDefault: {
-    backgroundColor: DL.text,
-  },
-  alertBtnCancel: {
-    backgroundColor: 'transparent',
-    borderColor: '#2A2F38',
-    borderWidth: 1,
-  },
-  alertBtnDestructive: {
-    backgroundColor: 'rgba(255, 51, 51, 0.12)',
-    borderColor: 'rgba(255, 51, 51, 0.3)',
-    borderWidth: 1,
-  },
-  alertButtonText: {
     fontSize: 11,
+    fontWeight: '700',
+    color: '#FFFFFF',
+  },
+  heroCardBalanceWrap: {
+    marginVertical: 10,
+  },
+  heroCardBalance: {
+    fontSize: 34,
+    fontWeight: '900',
+    color: '#FFFFFF',
+    letterSpacing: -0.5,
+  },
+  cardMaskedNumber: {
     fontFamily: DLFonts.mono,
-    fontWeight: 'bold',
+    fontSize: 12,
+    fontWeight: '700',
+    color: 'rgba(255, 255, 255, 0.85)',
+    letterSpacing: 1.8,
+    marginTop: 4,
   },
-  alertBtnTextDefault: {
-    color: '#000000',
-  },
-  alertBtnTextCancel: {
-    color: DL.muted,
-  },
-  alertBtnTextDestructive: {
-    color: '#FF3333',
-  },
-  // Floating Action Button (FAB)
-  fab: {
-    position: 'absolute',
-    bottom: 24,
-    right: 20,
-    width: 56,
-    height: 56,
-    borderRadius: 28,
-    backgroundColor: DL.text,
-    justifyContent: 'center',
+  heroCardBottom: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
     alignItems: 'center',
-    shadowColor: '#000',
+    paddingTop: 4,
+  },
+  visaText: {
+    fontFamily: DLFonts.sans,
+    fontSize: 20,
+    fontWeight: '900',
+    fontStyle: 'italic',
+    color: '#FFFFFF',
+    letterSpacing: 2,
+  },
+  heroCardBottomRight: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  cardExpVal: {
+    fontFamily: DLFonts.mono,
+    fontSize: 11,
+    fontWeight: '700',
+    color: 'rgba(255, 255, 255, 0.9)',
+  },
+  cardUnderlay: {
+    height: 12,
+    marginHorizontal: 16,
+    backgroundColor: 'rgba(255, 255, 255, 0.7)',
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: 'rgba(226, 232, 240, 0.85)',
+    marginTop: -6,
+    shadowColor: '#0F172A',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.04,
+    shadowRadius: 8,
+    elevation: 2,
+  },
+
+  // ─── Quick Actions Row (modeled on picture 2) ────────────────────────
+  quickActionsCard: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    backgroundColor: '#FFFFFF',
+    borderRadius: 22,
+    borderWidth: 1,
+    borderColor: 'rgba(226, 232, 240, 0.8)',
+    paddingVertical: 14,
+    paddingHorizontal: 12,
+    marginBottom: 20,
+    shadowColor: '#0F172A',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.05,
+    shadowRadius: 10,
+    elevation: 2,
+  },
+  quickActionBtn: {
+    alignItems: 'center',
+    gap: 5,
+    flex: 1,
+  },
+  quickActionCircle: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: '#EFF6FF',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(37, 99, 235, 0.12)',
+  },
+  quickActionLabel: {
+    fontFamily: DLFonts.sans,
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#334155',
+  },
+  quickCenterActionBtn: {
+    alignItems: 'center',
+    gap: 5,
+    flex: 1.2,
+  },
+  quickCenterCircle: {
+    width: 52,
+    height: 52,
+    borderRadius: 26,
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#4F46E5',
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.3,
-    shadowRadius: 6,
-    elevation: 6,
-    zIndex: 99,
+    shadowRadius: 10,
+    elevation: 4,
   },
-  fabText: {
-    fontSize: 28,
+  quickCenterLabel: {
+    fontFamily: DLFonts.sans,
+    fontSize: 10,
+    fontWeight: '800',
+    color: '#0B132B',
+    letterSpacing: 0.5,
+  },
+
+  // ─── Vault Pill Card ─────────────────────────────────────────────────
+  vaultPillCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: '#FFFFFF',
+    borderColor: 'rgba(0, 0, 0, 0.05)',
+    borderWidth: 1,
+    borderRadius: 18,
+    padding: 14,
+    marginBottom: 24,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.03,
+    shadowRadius: 6,
+    elevation: 1,
+  },
+  vaultLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  vaultPillTitle: {
+    fontFamily: DLFonts.mono,
+    fontSize: 9,
+    fontWeight: '800',
+    color: '#FF5E3A',
+    letterSpacing: 1,
+  },
+  vaultPillBalance: {
+    fontFamily: DLFonts.mono,
+    fontSize: 16,
+    fontWeight: '800',
+    color: '#0F172A',
+    marginTop: 1,
+  },
+  vaultPillActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  vaultPillBtn: {
+    backgroundColor: '#F1F5F9',
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  vaultPillBtnWd: {
+    backgroundColor: '#FEE2E2',
+  },
+  vaultPillBtnText: {
+    fontFamily: DLFonts.mono,
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#0F172A',
+  },
+  vaultPillMore: {
+    backgroundColor: '#0F172A',
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  vaultPillMoreText: {
+    fontFamily: DLFonts.mono,
+    fontSize: 9,
+    fontWeight: '700',
+    color: '#FFFFFF',
+  },
+
+  // ─── Active Envelopes ────────────────────────────────────────────────
+  sectionHeaderWrap: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-end',
+    marginBottom: 14,
+    paddingHorizontal: 2,
+  },
+  sectionTitle: {
+    fontFamily: DLFonts.mono,
+    fontSize: 10,
+    fontWeight: '800',
+    color: '#64748B',
+    letterSpacing: 1.5,
+  },
+  sectionSubtitle: {
+    fontSize: 12,
+    color: '#94A3B8',
+    marginTop: 2,
+  },
+  clearFilterBtn: {
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+  },
+  clearFilterText: {
+    fontFamily: DLFonts.mono,
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#2563EB',
+    letterSpacing: 1,
+  },
+  envelopeScrollList: {
+    gap: 12,
+    paddingBottom: 16,
+  },
+  envelopeCard: {
+    width: 120,
+    backgroundColor: '#FFFFFF',
+    borderColor: 'rgba(226, 232, 240, 0.85)',
+    borderWidth: 1,
+    borderRadius: 22,
+    padding: 14,
+    alignItems: 'center',
+    shadowColor: '#0F172A',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.04,
+    shadowRadius: 8,
+    elevation: 2,
+  },
+  envelopeCardSelected: {
+    borderColor: '#2563EB',
+    backgroundColor: '#EFF6FF',
+  },
+  bubbleCircle: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: '#F1F5F9',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 8,
+  },
+  envelopeCardSpent: {
+    fontFamily: DLFonts.mono,
+    fontSize: 13,
+    fontWeight: '800',
+    color: '#0B132B',
+    marginBottom: 2,
+  },
+  envelopeCardName: {
+    fontSize: 11.5,
+    fontWeight: '600',
+    color: '#64748B',
+    textAlign: 'center',
+  },
+  miniTrack: {
+    width: '100%',
+    height: 4,
+    backgroundColor: '#F1F5F9',
+    borderRadius: 2,
+    marginTop: 8,
+    overflow: 'hidden',
+  },
+  miniBar: {
+    height: '100%',
+    borderRadius: 2,
+  },
+
+  // ─── Transactions Stream (Directly from Screenshot) ───────────────────
+  streamSectionHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginTop: 8,
+    marginBottom: 14,
+    paddingHorizontal: 2,
+  },
+  transactionsMainTitle: {
+    fontSize: 20,
+    fontWeight: '800',
+    color: '#0F172A',
+    letterSpacing: -0.3,
+  },
+  transactionsSubCount: {
+    fontSize: 12,
+    color: '#64748B',
+    marginTop: 1,
+  },
+  selectAllBtn: {
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+  },
+  selectAllText: {
+    fontFamily: DLFonts.mono,
+    fontSize: 10,
+    fontWeight: '800',
+    color: '#FF5E3A',
+    letterSpacing: 1,
+  },
+  filterPillGroup: {
+    flexDirection: 'row',
+    backgroundColor: '#FFFFFF',
+    borderColor: 'rgba(0, 0, 0, 0.06)',
+    borderWidth: 1,
+    borderRadius: 12,
+    padding: 3,
+    gap: 3,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.03,
+    shadowRadius: 3,
+    elevation: 1,
+  },
+  filterPill: {
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 9,
+  },
+  filterPillActive: {
+    backgroundColor: '#0F172A',
+  },
+  filterPillText: {
+    fontFamily: DLFonts.mono,
+    fontSize: 9,
+    color: '#64748B',
+    letterSpacing: 0.8,
+  },
+  filterPillTextActive: {
+    color: '#FFFFFF',
+    fontWeight: '800',
+  },
+
+  // Grouped rows
+  groupContainer: {
+    marginBottom: 16,
+  },
+  groupHeader: {
+    fontFamily: DLFonts.mono,
+    fontSize: 10,
+    letterSpacing: 1.5,
+    color: '#94A3B8',
+    marginBottom: 8,
+    marginLeft: 4,
+  },
+  swipeContainer: {
+    marginBottom: 8,
+    borderRadius: 18,
+    overflow: 'hidden',
+  },
+  txCard: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    backgroundColor: '#FFFFFF',
+    borderColor: 'rgba(0, 0, 0, 0.04)',
+    borderWidth: 1,
+    borderRadius: 18,
+    paddingHorizontal: 14,
+    paddingVertical: 14,
+    shadowColor: '#000000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.03,
+    shadowRadius: 6,
+    elevation: 1,
+  },
+  txCardPressed: {
+    backgroundColor: '#F8FAFC',
+    transform: [{ scale: 0.99 }],
+  },
+  txCardChecked: {
+    borderColor: '#10B981',
+    backgroundColor: '#F0FDF4',
+  },
+  checkbox: {
+    width: 22,
+    height: 22,
+    borderRadius: 7,
+    borderColor: 'rgba(0, 0, 0, 0.15)',
+    borderWidth: 1.5,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 10,
+  },
+  checkboxChecked: {
+    backgroundColor: '#10B981',
+    borderColor: '#10B981',
+  },
+  txLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    flex: 1,
+    marginRight: 8,
+  },
+  titleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  subcatPill: {
+    backgroundColor: '#F1F5F9',
+    borderRadius: 6,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+  },
+  subcatPillText: {
+    fontFamily: DLFonts.mono,
+    fontSize: 9,
+    color: '#475569',
+    fontWeight: '700',
+  },
+  txTitle: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#0F172A',
+  },
+  txCategory: {
+    fontSize: 12,
+    color: '#64748B',
+    marginTop: 2,
+  },
+  txRegret: {
+    color: '#F59E0B',
+  },
+  txAmount: {
+    fontFamily: DLFonts.mono,
+    fontSize: 15,
+    fontWeight: '800',
+  },
+  txAmountExpense: {
+    color: '#EF4444',
+  },
+  txAmountIncome: {
+    color: '#10B981',
+  },
+  deleteActionWrap: {
+    width: 76,
+    backgroundColor: '#EF4444',
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderRadius: 18,
+  },
+  duplicateActionWrap: {
+    width: 76,
+    backgroundColor: '#0F172A',
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderRadius: 18,
+  },
+  actionBtnInner: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 4,
+  },
+  actionBtnText: {
+    fontFamily: DLFonts.mono,
+    fontSize: 9,
+    fontWeight: '800',
+    color: '#FFFFFF',
+    letterSpacing: 1,
+  },
+
+  // Empty state
+  emptyState: {
+    alignItems: 'center',
+    paddingVertical: 44,
+  },
+  emptyIcon: {
+    fontSize: 40,
+    marginBottom: 10,
+  },
+  emptyTitle: {
+    fontSize: 16,
+    fontWeight: '800',
+    color: '#0F172A',
+  },
+  emptySubtitle: {
+    fontSize: 13,
+    color: '#64748B',
+    marginTop: 4,
+    textAlign: 'center',
+    maxWidth: 260,
+  },
+
+  // ─── Floating Center Action Button ────────────────────────────────────
+  fabCenter: {
+    position: 'absolute',
+    bottom: 20,
+    alignSelf: 'center',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: '#0F172A',
+    paddingHorizontal: 22,
+    paddingVertical: 14,
+    borderRadius: 28,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.25,
+    shadowRadius: 12,
+    elevation: 8,
+  },
+  fabIconCircle: {
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    backgroundColor: '#FF5E3A',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  fabCenterText: {
+    fontFamily: DLFonts.mono,
+    fontSize: 12,
+    fontWeight: '900',
+    color: '#FFFFFF',
+    letterSpacing: 1.2,
+  },
+
+  // Select Mode Bottom Bar
+  bulkActionBar: {
+    position: 'absolute',
+    bottom: 88,
+    left: 18,
+    right: 18,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: '#FFFFFF',
+    borderColor: 'rgba(226, 232, 240, 0.95)',
+    borderWidth: 1.5,
+    borderRadius: 24,
+    paddingHorizontal: 20,
+    paddingVertical: 14,
+    shadowColor: '#0F172A',
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.16,
+    shadowRadius: 16,
+    elevation: 10,
+  },
+  bulkCountText: {
+    fontFamily: DLFonts.mono,
+    fontSize: 13,
+    fontWeight: '800',
+    color: '#0F172A',
+  },
+  bulkDeleteBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: '#EF4444',
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderRadius: 12,
+  },
+  bulkDeleteBtnText: {
+    fontFamily: DLFonts.mono,
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#FFFFFF',
+  },
+
+  // ─── Light Modals: Month & Bulk Add ──────────────────────────────────
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(15, 23, 42, 0.5)',
+    justifyContent: 'flex-end',
+  },
+  modalCard: {
+    backgroundColor: '#FFFFFF',
+    borderTopLeftRadius: 28,
+    borderTopRightRadius: 28,
+    padding: 22,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: -4 },
+    shadowOpacity: 0.1,
+    shadowRadius: 16,
+    elevation: 12,
+  },
+  modalHeaderRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+  },
+  modalTitle: {
+    fontFamily: DLFonts.mono,
+    fontSize: 14,
+    fontWeight: '900',
+    color: '#0F172A',
+    letterSpacing: 1.2,
+  },
+  modalSub: {
+    fontSize: 13,
+    color: '#64748B',
+    marginTop: 3,
+    marginBottom: 14,
+  },
+  modalCloseBtn: {
+    padding: 6,
+  },
+  modalCloseText: {
+    fontSize: 18,
+    color: '#64748B',
+  },
+  monthStatusBox: {
+    backgroundColor: '#F8FAFC',
+    borderRadius: 18,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: 'rgba(0, 0, 0, 0.05)',
+    marginBottom: 16,
+  },
+  monthStatusLabel: {
+    fontFamily: DLFonts.mono,
+    fontSize: 9,
+    letterSpacing: 1.5,
+    color: '#64748B',
+  },
+  monthStatusMonth: {
+    fontSize: 20,
+    fontWeight: '900',
+    color: '#0F172A',
+    marginTop: 2,
+    marginBottom: 12,
+  },
+  monthStatPillsRow: {
+    flexDirection: 'row',
+    gap: 10,
+  },
+  monthStatPill: {
+    flex: 1,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 10,
+    padding: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(0, 0, 0, 0.05)',
+  },
+  monthStatPillLabel: {
+    fontFamily: DLFonts.mono,
+    fontSize: 8,
+    color: '#64748B',
+    letterSpacing: 1,
+  },
+  monthStatPillVal: {
+    fontFamily: DLFonts.mono,
+    fontSize: 14,
+    fontWeight: '800',
+    color: '#0F172A',
+    marginTop: 2,
+  },
+  sectionModalLabel: {
+    fontFamily: DLFonts.mono,
+    fontSize: 9,
+    letterSpacing: 1.5,
+    color: '#64748B',
+    marginBottom: 8,
+  },
+  quickJumpRow: {
+    flexDirection: 'row',
+    gap: 8,
+    marginBottom: 16,
+  },
+  quickJumpBtn: {
+    flex: 1,
+    backgroundColor: '#F1F5F9',
+    borderRadius: 12,
+    paddingVertical: 11,
+    alignItems: 'center',
+  },
+  quickJumpBtnActive: {
+    backgroundColor: '#0F172A',
+  },
+  quickJumpBtnText: {
+    fontFamily: DLFonts.mono,
+    fontSize: 10,
+    fontWeight: '800',
+    color: '#64748B',
+    letterSpacing: 1,
+  },
+  quickJumpBtnActiveText: {
+    color: '#FFFFFF',
+  },
+  resetCard: {
+    backgroundColor: '#FEF2F2',
+    borderColor: '#FCA5A5',
+    borderWidth: 1,
+    borderRadius: 16,
+    padding: 16,
+    marginBottom: 16,
+  },
+  resetCardHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 6,
+  },
+  resetCardTitle: {
+    fontFamily: DLFonts.mono,
+    fontSize: 11,
+    fontWeight: '900',
+    color: '#DC2626',
+    letterSpacing: 1,
+  },
+  resetCardDesc: {
+    fontSize: 12,
+    color: '#7F1D1D',
+    lineHeight: 18,
+    marginBottom: 14,
+  },
+  resetActionBtn: {
+    backgroundColor: '#DC2626',
+    borderRadius: 12,
+    paddingVertical: 12,
+    alignItems: 'center',
+  },
+  resetActionBtnText: {
+    fontFamily: DLFonts.mono,
+    fontSize: 11,
+    fontWeight: '900',
+    color: '#FFFFFF',
+    letterSpacing: 1,
+  },
+  closeModalFullBtn: {
+    backgroundColor: '#F1F5F9',
+    borderRadius: 12,
+    paddingVertical: 12,
+    alignItems: 'center',
+  },
+  closeModalFullBtnText: {
+    fontFamily: DLFonts.mono,
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#64748B',
+    letterSpacing: 1,
+  },
+
+  // Bulk Add Modal internal
+  presetHeading: {
+    fontFamily: DLFonts.mono,
+    fontSize: 9,
+    letterSpacing: 1,
+    color: '#64748B',
+    marginBottom: 6,
+  },
+  presetScroll: {
+    marginBottom: 12,
+  },
+  presetPill: {
+    backgroundColor: '#F1F5F9',
+    borderRadius: 20,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    marginRight: 8,
+  },
+  presetPillText: {
+    fontFamily: DLFonts.mono,
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#0F172A',
+  },
+  bulkRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 8,
+  },
+  bulkRowIdx: {
+    fontFamily: DLFonts.mono,
+    fontSize: 11,
+    color: '#94A3B8',
+    width: 20,
+  },
+  bulkAmountInput: {
+    width: 95,
+    backgroundColor: '#F8FAFC',
+    borderColor: 'rgba(0, 0, 0, 0.08)',
+    borderWidth: 1,
+    borderRadius: 10,
+    paddingHorizontal: 10,
+    paddingVertical: 9,
+    color: '#0F172A',
+    fontFamily: DLFonts.mono,
+    fontSize: 13,
+  },
+  bulkNoteInput: {
+    flex: 1,
+    backgroundColor: '#F8FAFC',
+    borderColor: 'rgba(0, 0, 0, 0.08)',
+    borderWidth: 1,
+    borderRadius: 10,
+    paddingHorizontal: 10,
+    paddingVertical: 9,
+    color: '#0F172A',
+    fontSize: 13,
+  },
+  bulkRemoveBtn: {
+    padding: 6,
+  },
+  bulkRemoveText: {
+    color: '#EF4444',
+    fontSize: 14,
     fontWeight: 'bold',
-    color: '#000000',
-    lineHeight: 34,
+  },
+  addMoreRowBtn: {
+    alignItems: 'center',
+    paddingVertical: 11,
+    borderColor: 'rgba(0, 0, 0, 0.12)',
+    borderWidth: 1,
+    borderStyle: 'dashed',
+    borderRadius: 10,
+    marginVertical: 8,
+  },
+  addMoreRowText: {
+    fontFamily: DLFonts.mono,
+    fontSize: 10,
+    fontWeight: '800',
+    color: '#FF5E3A',
+    letterSpacing: 1,
+  },
+  modalBtnRow: {
+    flexDirection: 'row',
+    gap: 12,
+    marginTop: 16,
+  },
+  cancelBtn: {
+    flex: 1,
+    backgroundColor: '#F1F5F9',
+    borderRadius: 12,
+    paddingVertical: 12,
+    alignItems: 'center',
+  },
+  cancelBtnText: {
+    fontFamily: DLFonts.mono,
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#64748B',
+    letterSpacing: 1,
+  },
+  submitBtn: {
+    flex: 1,
+    backgroundColor: '#0F172A',
+    borderRadius: 12,
+    paddingVertical: 12,
+    alignItems: 'center',
+  },
+  submitBtnText: {
+    fontFamily: DLFonts.mono,
+    fontSize: 11,
+    fontWeight: '900',
+    color: '#FFFFFF',
+    letterSpacing: 1,
+  },
+  loadingBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    backgroundColor: '#FFFFFF',
+    borderColor: 'rgba(226, 232, 240, 0.8)',
+    borderWidth: 1,
+    borderRadius: 14,
+    paddingVertical: 10,
+    marginVertical: 10,
+  },
+  loadingBannerText: {
+    fontFamily: DLFonts.mono,
+    fontSize: 11,
+    color: '#2563EB',
+    fontWeight: '700',
+  },
+  floatingQuickLogBtn: {
+    position: 'absolute',
+    bottom: 88,
+    alignSelf: 'center',
+    borderRadius: 22,
+    shadowColor: '#4F46E5',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.28,
+    shadowRadius: 12,
+    elevation: 8,
+    zIndex: 10,
+  },
+  floatingQuickLogGradient: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 18,
+    paddingVertical: 10,
+    borderRadius: 22,
+  },
+  floatingQuickLogText: {
+    fontFamily: DLFonts.sans,
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#FFFFFF',
+    letterSpacing: 0.8,
   },
 });
+

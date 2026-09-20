@@ -1,4 +1,5 @@
 import { supabase } from './supabase';
+import { RegretLevel } from './budgetTypes';
 
 export interface ExpenseCategory {
   id: string;
@@ -23,6 +24,9 @@ export interface Transaction {
   type: 'expense' | 'income';
   created_at: string;
   category?: ExpenseCategory;
+  is_ghost?: boolean;
+  regret?: RegretLevel;
+  goal_id?: string | null;
 }
 
 /**
@@ -155,6 +159,9 @@ export async function createTransaction(payload: {
   source: 'manual' | 'wishlist_link';
   linked_item_id?: string | null;
   type?: 'expense' | 'income';
+  is_ghost?: boolean;
+  regret?: RegretLevel;
+  goal_id?: string | null;
 }): Promise<Transaction> {
   const { data: { session } } = await supabase.auth.getSession();
   if (!session) throw new Error('Not authenticated');
@@ -171,6 +178,9 @@ export async function createTransaction(payload: {
         source: payload.source,
         linked_item_id: payload.linked_item_id || null,
         type: payload.type ?? 'expense',
+        is_ghost: payload.is_ghost ?? false,
+        regret: payload.regret ?? 'unrated',
+        goal_id: payload.goal_id || null,
       },
     ])
     .select(`
@@ -225,6 +235,8 @@ export async function updateTransaction(id: string, payload: {
   occurred_at: string; // YYYY-MM-DD
   linked_item_id?: string | null;
   type?: 'expense' | 'income';
+  is_ghost?: boolean;
+  regret?: RegretLevel;
 }): Promise<Transaction> {
   const { data: { session } } = await supabase.auth.getSession();
   if (!session) throw new Error('Not authenticated');
@@ -239,6 +251,12 @@ export async function updateTransaction(id: string, payload: {
 
   if (payload.type !== undefined) {
     updatePayload.type = payload.type;
+  }
+  if (payload.is_ghost !== undefined) {
+    updatePayload.is_ghost = payload.is_ghost;
+  }
+  if (payload.regret !== undefined) {
+    updatePayload.regret = payload.regret;
   }
 
   const { data, error } = await supabase

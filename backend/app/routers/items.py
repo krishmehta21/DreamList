@@ -22,12 +22,22 @@ logger = logging.getLogger(__name__)
 # Global in-memory dictionary to track when research was started for each item
 # Format: {item_id_str: start_datetime}
 research_start_times = {}
+last_timeout_check_time = datetime.min
 
 def check_and_clean_timeouts(client: Client, user_id: str):
     """
     Checks if any wishlist items currently in 'pending' or 'researching' state
     have exceeded the 2-minute timeout threshold, and marks them as 'failed'.
+    Optimized: skips database query if no research tasks are active and checked recently.
     """
+    global last_timeout_check_time
+    now = datetime.utcnow()
+    
+    # If no research tasks are active in memory and we checked less than 30s ago, skip DB call
+    if not research_start_times and (now - last_timeout_check_time).total_seconds() < 30:
+        return
+        
+    last_timeout_check_time = now
     try:
         response = client.table("wishlist_items") \
             .select("id, status, created_at") \

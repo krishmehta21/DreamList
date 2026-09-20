@@ -5,11 +5,11 @@ import {
   Pressable,
   StyleSheet,
   Linking,
-  Alert,
   ActivityIndicator,
   TextInput,
   InteractionManager,
 } from 'react-native';
+import { CustomAlert as Alert } from '@/components/CustomAlert';
 import { Image } from 'expo-image';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
@@ -189,7 +189,13 @@ export default function ItemDetailScreen() {
     updateCachedItem({ ...item, ...updatedFields } as WishlistItem);
 
     try {
-      const updated = await updateItem(id, updatedFields);
+      const updated = await updateItem(id, {
+        name: nameTrimmed,
+        category: finalCategory,
+        tier: editTier,
+        manual_notes: editNotes.trim() || undefined,
+        manual_link: editLink.trim() || undefined,
+      });
       setItem((prev) => (prev ? { ...prev, ...updated } : prev));
       updateCachedItem({ ...item, ...updated } as WishlistItem);
       setIsEditing(false);
@@ -1733,6 +1739,6 @@ const styles = StyleSheet.create({
     color: '#000000',
     fontSize: 11,
     fontWeight: 'bold',
-    fontFamily: DLFonts.medium,
+    fontFamily: DLFonts.sans,
   },
 });

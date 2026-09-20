@@ -6,11 +6,11 @@ import {
   StyleSheet,
   Pressable,
   ActivityIndicator,
-  Alert,
   LayoutAnimation,
   UIManager,
   Platform,
 } from 'react-native';
+import { CustomAlert as Alert } from '@/components/CustomAlert';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import ReanimatedSwipeable from 'react-native-gesture-handler/ReanimatedSwipeable';
@@ -18,6 +18,7 @@ import Reanimated, { SharedValue, useAnimatedStyle } from 'react-native-reanimat
 import { supabase } from '@/lib/supabase';
 import { PieChart, BarChart } from 'react-native-gifted-charts';
 import { DL, DLFonts } from '@/constants/design';
+import { BackButton } from '@/components/ui/BackButton';
 import {
   fetchCategories,
   deleteTransaction,
@@ -35,9 +36,6 @@ import {
   PeriodStats,
 } from '@/lib/insightsApi';
 
-if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
-  UIManager.setLayoutAnimationEnabledExperimental(true);
-}
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 const INCOME_COLOR  = '#22C55E';
@@ -347,9 +345,7 @@ export default function InsightsScreen() {
       {/* ── Fixed Header ──────────────────────────────────────────────────── */}
       <View style={[styles.header, { paddingTop: insets.top + 8 }]}>
         <View style={styles.headerTopRow}>
-          <Pressable style={styles.backBtn} onPress={() => router.back()}>
-            <Text style={styles.backBtnText}>← LEDGER</Text>
-          </Pressable>
+          <BackButton label="Tracker" />
           <Text style={styles.headerTitle}>INSIGHTS</Text>
           <View style={{ width: 72 }} />
         </View>
@@ -752,9 +748,9 @@ const styles = StyleSheet.create({
 
   // Header
   header: {
-    backgroundColor: '#0B0D10',
+    backgroundColor: '#FFFFFF',
     borderBottomWidth: 1,
-    borderBottomColor: '#161822',
+    borderBottomColor: DL.border,
     paddingHorizontal: 20,
     paddingBottom: 12,
   },
@@ -786,7 +782,8 @@ const styles = StyleSheet.create({
     paddingVertical: 6,
     borderRadius: 20,
     borderWidth: 1.2,
-    borderColor: '#1C202A',
+    borderColor: DL.border,
+    backgroundColor: '#FFFFFF',
   },
   periodChipText: {
     fontFamily: DLFonts.mono,
@@ -801,12 +798,12 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    backgroundColor: '#13161C',
+    backgroundColor: '#F8FAFC',
     borderRadius: 10,
     paddingVertical: 6,
     paddingHorizontal: 10,
     borderWidth: 1,
-    borderColor: '#1C202A',
+    borderColor: DL.border,
   },
   monthArrow: { paddingHorizontal: 8, paddingVertical: 2 },
   monthArrowText: {
@@ -972,7 +969,7 @@ const styles = StyleSheet.create({
   catBarBg: {
     flex: 1,
     height: 3,
-    backgroundColor: '#161822',
+    backgroundColor: '#E2E8F0',
     borderRadius: 2,
     overflow: 'hidden',
   },
@@ -988,9 +985,11 @@ const styles = StyleSheet.create({
 
   // Drill-down
   drillDownContainer: {
-    backgroundColor: '#0A0C10',
+    backgroundColor: '#F8FAFC',
     marginHorizontal: -4,
     borderRadius: 12,
+    borderWidth: 1,
+    borderColor: DL.border,
     overflow: 'hidden',
     marginBottom: 4,
   },
@@ -1006,12 +1005,12 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingHorizontal: 16,
     paddingVertical: 12,
-    backgroundColor: '#0A0C10',
+    backgroundColor: '#FFFFFF',
     gap: 12,
   },
   drillTxDivider: {
     borderTopWidth: 1,
-    borderTopColor: '#161822',
+    borderTopColor: DL.border,
   },
   txInfo: { flex: 1 },
   txNote: {

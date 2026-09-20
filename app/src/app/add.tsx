@@ -8,8 +8,8 @@ import {
   StyleSheet,
   ActivityIndicator,
   Animated,
-  Alert,
 } from 'react-native';
+import { CustomAlert as Alert } from '@/components/CustomAlert';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { getCachedItems, saveCachedItems } from '@/lib/database';
@@ -18,6 +18,7 @@ import { createItem } from '@/lib/api';
 import { useAuth } from '@/context/AuthContext';
 import type { Category, Tier, WishlistItem } from '@/lib/types';
 import { CATEGORIES, TIERS } from '@/lib/types';
+import { BackButton } from '@/components/ui/BackButton';
 
 // Category emoji dictionary
 const CATEGORY_EMOJIS: Record<Category, string> = {
@@ -222,6 +223,7 @@ export default function AddItemScreen() {
     >
       {/* Header */}
       <View style={styles.header}>
+        <BackButton style={{ marginBottom: 12 }} />
         <Text style={styles.eyebrow}>ADD ITEM</Text>
         <Text style={styles.title}>New Wishlist Item</Text>
       </View>
@@ -416,7 +418,7 @@ const styles = StyleSheet.create({
   inputContainer: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: 'rgba(255, 255, 255, 0.02)',
+    backgroundColor: '#FFFFFF',
     borderColor: DL.border,
     borderWidth: 1.2,
     borderRadius: 12,
@@ -424,8 +426,8 @@ const styles = StyleSheet.create({
     height: 52,
   },
   inputContainerFocused: {
-    borderColor: DL.soon,
-    backgroundColor: 'rgba(0, 0, 0, 0.2)',
+    borderColor: DL.accent,
+    backgroundColor: '#FFFFFF',
   },
   input: {
     flex: 1,
@@ -472,14 +474,14 @@ const styles = StyleSheet.create({
     width: '100%',
   },
   submitButton: {
-    backgroundColor: DL.now,
+    backgroundColor: DL.accent,
     borderRadius: 12,
     paddingVertical: 15,
     alignItems: 'center',
     marginTop: 8,
   },
   submitText: {
-    color: '#0B0D10',
+    color: '#FFFFFF',
     fontSize: 15,
     fontWeight: 'bold',
     fontFamily: DLFonts.sans,

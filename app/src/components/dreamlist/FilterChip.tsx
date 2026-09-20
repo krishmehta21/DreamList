@@ -48,7 +48,7 @@ export default function FilterChip({ label, active, color, onPress }: FilterChip
                 elevation: 4,
               }
             : {
-                backgroundColor: 'rgba(255, 255, 255, 0.02)',
+                backgroundColor: '#FFFFFF',
                 borderColor: DL.border,
               },
         ]}

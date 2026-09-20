@@ -163,6 +163,27 @@ We tested scrolling performance under realistic and extreme loads (20 items and 
   * Created [database.web.ts](file:///c:/Users/21meh/OneDrive/Desktop/DreamList/app/src/lib/database.web.ts) implementing a fully functional mock database utilizing standard browser `localStorage` as a fallback.
   * Metro automatically selects the appropriate `.native.ts` vs `.web.ts` suffix during resolution, preventing native `expo-sqlite` imports from touching the web bundling pipeline. Verified that the web bundle compiles successfully via `npx expo export`.
 
+---
+
+## 13. React Native Reanimated Hook & Import Bug Fixes
+* **`FuneralBalloon` Hook Ordering Bug**:
+  * **Root Cause**: React Native Metro bundler/HMR was mixing hook tracking indices when `BalloonParticle` components were conditionally mapped inline inside `FuneralBalloon.tsx`.
+  * **Fix**: Extracted the `BalloonParticle` component to its own module file [BalloonParticle.tsx](file:///c:/Users/21meh/OneDrive/Desktop/DreamList/app/src/components/BalloonParticle.tsx), removing local hook definitions from the parent.
+* **`IcebergRenderer` ReferenceError**:
+  * **Fix**: Imported and rendered `IcebergRenderer` within [money.tsx](file:///c:/Users/21meh/OneDrive/Desktop/DreamList/app/src/app/(tabs)/money.tsx) inside Section 2 (`Protected Wealth`).
+* **`ActivityIndicator` ReferenceError**:
+  * **Fix**: Imported `ActivityIndicator` from `react-native` in [categories.tsx](file:///c:/Users/21meh/OneDrive/Desktop/DreamList/app/src/app/expenses/categories.tsx).
+
+---
+
+## 14. Zero-Sum Budget Adjuster Bottom Sheet
+* **UX Redesign**: Integrated the Zero-Sum Budget envelope adjuster directly onto the primary **Finances/Money Tab screen** via a bottom-sheet modal.
+* **Flow**:
+  * Added a prominent `📊 ADJUST BUDGET ENVELOPES` trigger button on [money.tsx](file:///c:/Users/21meh/OneDrive/Desktop/DreamList/app/src/app/(tabs)/money.tsx).
+  * Tapping the button opens a modal sheet displaying all category limits.
+  * Balanced adjustments are calculated in real-time, zero-sum locked, and persisted immediately to update dashboard pacing, health score, and water/iceberg animations.
+
+
 
 
 

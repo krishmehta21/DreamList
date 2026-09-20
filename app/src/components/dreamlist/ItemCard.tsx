@@ -190,27 +190,27 @@ const styles = StyleSheet.create({
     marginLeft: 4, // slight inset to make space for accent bar
   },
   checkboxInactive: {
-    borderColor: '#4A4F59',
-    backgroundColor: 'transparent',
+    borderColor: DL.border,
+    backgroundColor: '#FFFFFF',
   },
   checkboxActive: {
-    borderColor: '#E7E9EE',
-    backgroundColor: 'transparent',
+    borderColor: DL.text,
+    backgroundColor: DL.text,
   },
   checkboxDot: {
     width: 8,
     height: 8,
     borderRadius: 4,
-    backgroundColor: '#E7E9EE',
+    backgroundColor: '#FFFFFF',
   },
   thumbnailContainer: {
     width: 40,
     height: 40,
-    borderRadius: 6,
+    borderRadius: 8,
     overflow: 'hidden',
-    backgroundColor: '#0B0D10', // same dark surface as screen background
-    borderColor: DL.border, // app's existing divider color
-    borderWidth: 0.5,
+    backgroundColor: '#F1F5F9',
+    borderColor: DL.border,
+    borderWidth: 1,
     marginRight: 12,
     alignItems: 'center',
     justifyContent: 'center',
@@ -227,18 +227,18 @@ const styles = StyleSheet.create({
   },
   name: {
     fontFamily: DLFonts.sans,
-    color: '#FFFFFF', // pure white for maximum pop/emphasis
+    color: DL.text,
     fontSize: 15,
-    fontWeight: '600', // bold to act as the primary visual anchor
+    fontWeight: '700',
     marginBottom: 2,
   },
   nameDone: {
     textDecorationLine: 'line-through',
-    color: '#5A606C',
+    color: DL.muted,
   },
   subline: {
     fontFamily: DLFonts.mono,
-    color: '#7E848F', // clearly secondary/muted
+    color: DL.muted,
     fontSize: 10.5,
   },
   rightColumn: {
@@ -248,28 +248,25 @@ const styles = StyleSheet.create({
   },
   priceText: {
     fontFamily: DLFonts.mono,
-    color: '#F2B84B', // distinct gold color to stand out without competing with title weight
+    color: '#D97706',
     fontSize: 13,
     fontWeight: '700',
-    letterSpacing: 2,
-    textShadowColor: 'rgba(242, 184, 75, 0.25)',
-    textShadowOffset: { width: 0, height: 0 },
-    textShadowRadius: 4,
+    letterSpacing: 1,
   },
   statusMuted: {
     fontFamily: DLFonts.mono,
-    color: '#5A606C',
+    color: DL.muted,
     fontSize: 11,
   },
   retryButton: {
     paddingVertical: 4,
     paddingHorizontal: 6,
     borderRadius: 4,
-    backgroundColor: '#1C1315',
+    backgroundColor: '#FEE2E2',
   },
   statusFailed: {
     fontFamily: DLFonts.mono,
-    color: '#FF3333',
+    color: '#EF4444',
     fontSize: 11,
     fontWeight: 'bold',
   },

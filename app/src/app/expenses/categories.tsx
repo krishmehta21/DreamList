@@ -5,15 +5,17 @@ import {
   StyleSheet,
   TextInput,
   Pressable,
-  ActivityIndicator,
   ScrollView,
-  Alert,
   Modal,
+  ActivityIndicator,
 } from 'react-native';
+import { CustomAlert as Alert } from '@/components/CustomAlert';
 import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { DL, DLFonts } from '@/constants/design';
 import { fetchCategories, createCategory, deleteCategory, reassignTransactions, ExpenseCategory } from '@/lib/expensesApi';
+import { useBudget } from '@/context/BudgetContext';
+import { BackButton } from '@/components/ui/BackButton';
 
 export const ICON_MAP: Record<string, string> = {
   Utensils: '🍔',
@@ -56,18 +58,23 @@ const ICON_OPTIONS = [
 ];
 
 const MOCK_CATEGORIES: ExpenseCategory[] = [
-  { id: 'cat-1', name: 'Food', icon: 'Utensils', color: '#F59E0B', is_default: true, user_id: null, created_at: '' },
-  { id: 'cat-2', name: 'Transport', icon: 'Car', color: '#3B82F6', is_default: true, user_id: null, created_at: '' },
-  { id: 'cat-3', name: 'Shopping', icon: 'ShoppingBag', color: '#EC4899', is_default: true, user_id: null, created_at: '' },
-  { id: 'cat-4', name: 'Bills', icon: 'CreditCard', color: '#EF4444', is_default: true, user_id: null, created_at: '' },
-  { id: 'cat-5', name: 'Entertainment', icon: 'Tv', color: '#8B5CF6', is_default: true, user_id: null, created_at: '' },
-  { id: 'cat-6', name: 'Health', icon: 'Heart', color: '#10B981', is_default: true, user_id: null, created_at: '' },
-  { id: 'cat-7', name: 'Other', icon: 'Coins', color: '#6B7280', is_default: true, user_id: null, created_at: '' },
+  { id: 'cat-1', name: 'Food', icon: 'Utensils', color: '#F59E0B', is_default: true, type: 'expense', user_id: null, created_at: '' },
+  { id: 'cat-2', name: 'Transport', icon: 'Car', color: '#3B82F6', is_default: true, type: 'expense', user_id: null, created_at: '' },
+  { id: 'cat-3', name: 'Shopping', icon: 'ShoppingBag', color: '#EC4899', is_default: true, type: 'expense', user_id: null, created_at: '' },
+  { id: 'cat-4', name: 'Bills', icon: 'CreditCard', color: '#EF4444', is_default: true, type: 'expense', user_id: null, created_at: '' },
+  { id: 'cat-5', name: 'Entertainment', icon: 'Tv', color: '#8B5CF6', is_default: true, type: 'expense', user_id: null, created_at: '' },
+  { id: 'cat-6', name: 'Health', icon: 'Heart', color: '#10B981', is_default: true, type: 'expense', user_id: null, created_at: '' },
+  { id: 'cat-7', name: 'Other', icon: 'Coins', color: '#6B7280', is_default: true, type: 'expense', user_id: null, created_at: '' },
 ];
 
 export default function CategoriesScreen() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
+
+  const { budgetMonth, categoryLimits, updateLimits } = useBudget();
+  const [localLimits, setLocalLimits] = useState<Record<string, number>>({});
+  const [committedLimits, setCommittedLimits] = useState<Record<string, number>>({});
+  const [savingLimits, setSavingLimits] = useState(false);
 
   const [categories, setCategories] = useState<ExpenseCategory[]>([]);
   const [loading, setLoading] = useState(true);
@@ -104,6 +111,117 @@ export default function CategoriesScreen() {
     loadData();
   }, [loadData]);
 
+  // Synchronize category limits state to local edit values
+  useEffect(() => {
+    if (budgetMonth && categories.length > 0) {
+      const initialLimits: Record<string, number> = {};
+      const expenseCats = categories.filter((c) => c.type === 'expense');
+      
+      if (expenseCats.length === 0) return;
+      
+      const totalAllowance = Number(budgetMonth.spendable_allowance);
+      const defaultAllocation = Math.floor(totalAllowance / expenseCats.length);
+
+      expenseCats.forEach((cat) => {
+        const existing = categoryLimits.find((l) => l.category_id === cat.id);
+        initialLimits[cat.id] = existing ? Number(existing.limit_amount) : defaultAllocation;
+      });
+      
+      setLocalLimits(initialLimits);
+      setCommittedLimits(initialLimits);
+    }
+  }, [budgetMonth, categoryLimits, categories]);
+
+  // Proportional zero-sum category balancer algorithm
+  const adjustLimit = (categoryId: string, change: number) => {
+    if (!budgetMonth) return;
+    const totalAllowance = Number(budgetMonth.spendable_allowance);
+    const expenseCats = categories.filter((c) => c.type === 'expense');
+    const otherCats = expenseCats.filter((c) => c.id !== categoryId);
+    
+    const currentVal = localLimits[categoryId] || 0;
+    const newVal = Math.max(0, Math.min(totalAllowance, currentVal + change));
+    const actualChange = newVal - currentVal;
+    
+    if (actualChange === 0) return;
+    
+    const nextLimits = { ...localLimits };
+    nextLimits[categoryId] = newVal;
+    
+    let remainder = -actualChange;
+    let iterations = 0;
+    
+    while (Math.abs(remainder) > 0.01 && iterations < 10) {
+      iterations++;
+      const eligibleCats = otherCats.filter((c) => {
+        const val = nextLimits[c.id] || 0;
+        if (remainder > 0) return true;
+        return val > 0;
+      });
+      
+      if (eligibleCats.length === 0) break;
+      
+      const share = remainder / eligibleCats.length;
+      let nextRemainder = 0;
+      
+      eligibleCats.forEach((c) => {
+        const val = nextLimits[c.id] || 0;
+        const adjustedVal = val + share;
+        if (adjustedVal < 0) {
+          nextLimits[c.id] = 0;
+          nextRemainder += adjustedVal;
+        } else {
+          nextLimits[c.id] = adjustedVal;
+        }
+      });
+      
+      remainder = nextRemainder;
+    }
+    
+    // Round to whole numbers to preserve Nothing/clean styling limits
+    let roundedSum = 0;
+    Object.keys(nextLimits).forEach((k) => {
+      nextLimits[k] = Math.round(nextLimits[k]);
+      roundedSum += nextLimits[k];
+    });
+    
+    const diff = totalAllowance - roundedSum;
+    if (diff !== 0 && otherCats.length > 0) {
+      const firstOtherId = otherCats[0].id;
+      nextLimits[firstOtherId] = Math.max(0, (nextLimits[firstOtherId] || 0) + diff);
+    }
+
+    setLocalLimits(nextLimits);
+  };
+
+  const handleSaveLimits = async () => {
+    if (!budgetMonth) return;
+    setSavingLimits(true);
+    try {
+      const payload = Object.entries(localLimits).map(([catId, val]) => ({
+        category_id: catId,
+        limit_amount: val,
+      }));
+      await updateLimits(payload);
+      setCommittedLimits(localLimits);
+      Alert.alert('Saved!', 'Category limits updated successfully.');
+    } catch (err) {
+      Alert.alert('Error', 'Failed to save category limits.');
+    } finally {
+      setSavingLimits(false);
+    }
+  };
+
+  const handleResetLimits = () => {
+    setLocalLimits(committedLimits);
+  };
+
+  const hasChanges = React.useMemo(() => {
+    return Object.keys(localLimits).some(
+      (key) => localLimits[key] !== committedLimits[key]
+    );
+  }, [localLimits, committedLimits]);
+
   const handleCreate = async () => {
     setError(null);
     if (!name.trim()) {
@@ -121,6 +239,7 @@ export default function CategoriesScreen() {
           icon: selectedIconName,
           color: selectedColor,
           is_default: false,
+          type: 'expense',
           user_id: 'user',
           created_at: new Date().toISOString(),
         };
@@ -207,9 +326,7 @@ export default function CategoriesScreen() {
       )}
       {/* Header */}
       <View style={[styles.header, { paddingTop: isDemoMode ? 8 : insets.top + 8 }]}>
-        <Pressable style={styles.backBtn} onPress={() => router.back()}>
-          <Text style={styles.backBtnText}>← Back</Text>
-        </Pressable>
+        <BackButton label="Back" />
         <Text style={styles.title}>Categories</Text>
         <View style={{ width: 60 }} />
       </View>
@@ -253,6 +370,98 @@ export default function CategoriesScreen() {
             </View>
           )}
         </View>
+
+        {/* Zero-Sum Limits Panel */}
+        {budgetMonth && (
+          <View style={styles.section}>
+            <Text style={styles.sectionHeader}>ZERO-SUM BUDGET ADJUSTER</Text>
+            <View style={styles.formCard}>
+              <Text style={styles.limitSummaryText}>
+                Total Spendable Allowance: <Text style={styles.limitSummaryBold}>₹{budgetMonth.spendable_allowance.toLocaleString('en-IN')}</Text>
+              </Text>
+              <Text style={styles.limitSummarySub}>
+                Increasing one category limit will automatically subtract from others to preserve the zero-sum target.
+              </Text>
+              
+              <View style={styles.limitRowsContainer}>
+                {categories
+                  .filter((c) => c.type === 'expense')
+                  .map((cat) => {
+                    const limitVal = localLimits[cat.id] || 0;
+                    const committedVal = committedLimits[cat.id] || 0;
+                    const isChanged = limitVal !== committedVal;
+                    const rowOpacity = isChanged ? 1.0 : (hasChanges ? 0.6 : 1.0);
+
+                    return (
+                      <View key={cat.id} style={[styles.limitRow, { opacity: rowOpacity }]}>
+                        <View style={styles.limitInfo}>
+                          <View style={[styles.colorDot, { backgroundColor: cat.color }]} />
+                          <Text style={styles.limitCatName}>{cat.name}</Text>
+                        </View>
+                        <View style={styles.limitAdjustRow}>
+                          <Pressable 
+                            style={styles.adjustBtn} 
+                            onPress={() => adjustLimit(cat.id, -500)}
+                            hitSlop={8}
+                          >
+                            <Text style={styles.adjustBtnText}>-</Text>
+                          </Pressable>
+                          
+                          <View style={{ alignItems: 'center', minWidth: 70 }}>
+                            {isChanged && (
+                              <Text style={styles.committedValText}>₹{committedVal.toLocaleString('en-IN')} →</Text>
+                            )}
+                            <Text style={[styles.limitValText, isChanged && { color: '#10B981', fontWeight: 'bold' }]}>
+                              ₹{limitVal.toLocaleString('en-IN')}
+                            </Text>
+                          </View>
+
+                          <Pressable 
+                            style={styles.adjustBtn} 
+                            onPress={() => adjustLimit(cat.id, 500)}
+                            hitSlop={8}
+                          >
+                            <Text style={styles.adjustBtnText}>+</Text>
+                          </Pressable>
+                        </View>
+                      </View>
+                    );
+                  })}
+              </View>
+              
+              {hasChanges ? (
+                <View style={styles.previewButtonsRow}>
+                  <Pressable
+                    style={styles.resetBtn}
+                    onPress={handleResetLimits}
+                    disabled={savingLimits}
+                  >
+                    <Text style={styles.resetBtnText}>RESET</Text>
+                  </Pressable>
+
+                  <Pressable
+                    style={styles.applyBtn}
+                    onPress={handleSaveLimits}
+                    disabled={savingLimits}
+                  >
+                    {savingLimits ? (
+                      <ActivityIndicator color={DL.bg} size="small" />
+                    ) : (
+                      <Text style={styles.applyBtnText}>APPLY CHANGES</Text>
+                    )}
+                  </Pressable>
+                </View>
+              ) : (
+                <Pressable
+                  style={[styles.saveBtn, { backgroundColor: '#1C2026', borderColor: DL.border, borderWidth: 1 }]}
+                  disabled={true}
+                >
+                  <Text style={[styles.saveBtnText, { color: DL.muted }]}>LIMITS COMMITTED</Text>
+                </Pressable>
+              )}
+            </View>
+          </View>
+        )}
 
         {/* Add Category Form */}
         <View style={styles.section}>
@@ -591,11 +800,16 @@ const styles = StyleSheet.create({
   },
   modalBox: {
     width: 310,
-    backgroundColor: '#161822',
-    borderColor: '#242830',
-    borderWidth: 1.2,
+    backgroundColor: '#FFFFFF',
+    borderColor: DL.border,
+    borderWidth: 1,
     borderRadius: 20,
     padding: 20,
+    shadowColor: '#0F172A',
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.12,
+    shadowRadius: 16,
+    elevation: 8,
   },
   modalTitle: {
     fontFamily: DLFonts.mono,
@@ -688,5 +902,132 @@ const styles = StyleSheet.create({
     fontFamily: DLFonts.sans,
     fontWeight: 'bold',
     textAlign: 'center',
+  },
+  limitSummaryText: {
+    fontFamily: DLFonts.mono,
+    fontSize: 12,
+    color: DL.text,
+    marginBottom: 4,
+  },
+  limitSummaryBold: {
+    fontWeight: 'bold',
+  },
+  limitSummarySub: {
+    fontFamily: DLFonts.sans,
+    fontSize: 11,
+    color: DL.muted,
+    lineHeight: 15,
+    marginBottom: 16,
+  },
+  limitRowsContainer: {
+    marginVertical: 8,
+  },
+  limitRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+    borderColor: '#1C202A',
+  },
+  limitInfo: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  colorDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+  },
+  limitCatName: {
+    fontFamily: DLFonts.sans,
+    fontSize: 13,
+    color: DL.text,
+  },
+  limitAdjustRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  adjustBtn: {
+    width: 28,
+    height: 28,
+    borderRadius: 6,
+    backgroundColor: '#F1F5F9',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: DL.border,
+  },
+  adjustBtnText: {
+    color: DL.text,
+    fontSize: 14,
+    fontWeight: 'bold',
+    fontFamily: DLFonts.mono,
+  },
+  limitValText: {
+    fontFamily: DLFonts.mono,
+    fontSize: 13,
+    color: DL.text,
+    minWidth: 60,
+    textAlign: 'center',
+  },
+  saveBtn: {
+    backgroundColor: DL.text,
+    borderRadius: 12,
+    height: 44,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 16,
+  },
+  saveBtnText: {
+    fontFamily: DLFonts.mono,
+    fontSize: 12,
+    color: '#FFFFFF',
+    fontWeight: 'bold',
+    letterSpacing: 1.5,
+  },
+  committedValText: {
+    fontFamily: DLFonts.mono,
+    fontSize: 9,
+    color: DL.muted,
+  },
+  previewButtonsRow: {
+    flexDirection: 'row',
+    gap: 12,
+    marginTop: 16,
+  },
+  resetBtn: {
+    flex: 1,
+    height: 44,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: DL.border,
+    backgroundColor: '#F1F5F9',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  resetBtnText: {
+    fontFamily: DLFonts.mono,
+    fontSize: 12,
+    color: DL.muted,
+    fontWeight: 'bold',
+    letterSpacing: 1.5,
+  },
+  applyBtn: {
+    flex: 1,
+    height: 44,
+    borderRadius: 12,
+    backgroundColor: DL.text,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  applyBtnText: {
+    fontFamily: DLFonts.mono,
+    fontSize: 12,
+    color: DL.bg,
+    fontWeight: 'bold',
+    letterSpacing: 1.5,
   },
 });

@@ -8,12 +8,12 @@ import {
   ActivityIndicator,
   Pressable,
   Platform,
-  Alert,
   Dimensions,
   Animated,
   PanResponder,
   Modal,
 } from 'react-native';
+import { CustomAlert as Alert } from '@/components/CustomAlert';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter, useLocalSearchParams, useFocusEffect } from 'expo-router';
 import { getCachedItems, saveCachedItems, reconcileItems } from '@/lib/database';
@@ -22,6 +22,7 @@ import { fetchItems, updateItem, deleteItem } from '@/lib/api';
 import { supabase } from '@/lib/supabase';
 import type { WishlistItem, Category, Tier } from '@/lib/types';
 import { TIERS } from '@/lib/types';
+import { BackButton } from '@/components/ui/BackButton';
 
 // ─── Swipeable Row (slide-left reveals delete) ────────────────────────────────
 interface SwipeableRowProps {
@@ -319,9 +320,7 @@ export default function CategoryScreen() {
     <View style={[styles.screen, { paddingTop: insets.top + 16 }]}>
       {/* Header Panel */}
       <View style={styles.header}>
-        <Pressable style={styles.backBtn} onPress={() => router.back()}>
-          <Text style={styles.backBtnText}>‹ Back</Text>
-        </Pressable>
+        <BackButton label="Back" />
         <Pressable
           style={styles.addBtnHeader}
           onPress={() => router.push({ pathname: '/add', params: { category } })}
@@ -611,7 +610,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingHorizontal: 20,
     paddingVertical: 13,
-    backgroundColor: '#0F1215',
+    backgroundColor: '#FFFFFF',
+    borderBottomWidth: 1,
+    borderBottomColor: DL.border,
     gap: 12,
   },
   modalCheckboxHit: {
@@ -623,8 +624,8 @@ const styles = StyleSheet.create({
     height: 20,
     borderRadius: 5,
     borderWidth: 1.5,
-    borderColor: '#404550',
-    backgroundColor: 'transparent',
+    borderColor: DL.border,
+    backgroundColor: '#FFFFFF',
     justifyContent: 'center',
     alignItems: 'center',
     flexShrink: 0,
@@ -637,7 +638,7 @@ const styles = StyleSheet.create({
     width: 8,
     height: 8,
     borderRadius: 2,
-    backgroundColor: '#0B0D10',
+    backgroundColor: '#FFFFFF',
   },
   modalRowText: {
     flex: 1,
@@ -688,22 +689,22 @@ const styles = StyleSheet.create({
   // Custom Dark Alert Modal Styles
   alertOverlay: {
     flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.75)',
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
     justifyContent: 'center',
     alignItems: 'center',
   },
   alertBox: {
     width: 290,
-    backgroundColor: '#161822',
-    borderColor: '#242830',
-    borderWidth: 1.2,
+    backgroundColor: '#FFFFFF',
+    borderColor: DL.border,
+    borderWidth: 1,
     borderRadius: 16,
     padding: 20,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 10 },
-    shadowOpacity: 0.5,
-    shadowRadius: 15,
-    elevation: 10,
+    shadowColor: '#0F172A',
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.12,
+    shadowRadius: 16,
+    elevation: 8,
   },
   alertTitle: {
     fontFamily: DLFonts.mono,
@@ -736,8 +737,8 @@ const styles = StyleSheet.create({
     backgroundColor: DL.text,
   },
   alertBtnCancel: {
-    backgroundColor: 'transparent',
-    borderColor: '#2A2F38',
+    backgroundColor: '#F1F5F9',
+    borderColor: DL.border,
     borderWidth: 1,
   },
   alertBtnDestructive: {

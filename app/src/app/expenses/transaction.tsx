@@ -10,6 +10,7 @@ import {
   ScrollView,
   Keyboard,
   TouchableWithoutFeedback,
+  Alert,
 } from 'react-native';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -17,6 +18,9 @@ import { DL, DLFonts } from '@/constants/design';
 import { fetchCategories, createTransaction, updateTransaction, ExpenseCategory } from '@/lib/expensesApi';
 import { getCachedItems } from '@/lib/database';
 import type { WishlistItem } from '@/lib/types';
+import { useBudget } from '@/context/BudgetContext';
+import { supabase } from '@/lib/supabase';
+import { getSubcategoriesForCategory, parseTransactionNote, formatTransactionNote } from '@/lib/subcategories';
 
 // ─── Demo-mode fallbacks ──────────────────────────────────────────────────────
 const MOCK_EXPENSE_CATEGORIES: ExpenseCategory[] = [
@@ -44,6 +48,8 @@ export default function TransactionModal() {
 
   const isEditMode = !!params.id;
 
+  const { budgetMonth, refreshData } = useBudget();
+
   // ─── State ────────────────────────────────────────────────────────────────
   const [expenseCategories, setExpenseCategories] = useState<ExpenseCategory[]>([]);
   const [incomeCategories,  setIncomeCategories]  = useState<ExpenseCategory[]>([]);
@@ -58,6 +64,7 @@ export default function TransactionModal() {
   const [transactionType,   setTransactionType]   = useState<'expense' | 'income'>('expense');
   const [note,              setNote]              = useState('');
   const [selectedCategoryId,setSelectedCategoryId]= useState<string | null>(null);
+  const [selectedSubcategory, setSelectedSubcategory] = useState<string | null>(null);
   const [occurredAt,        setOccurredAt]        = useState(() => {
     const d = new Date();
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
@@ -69,6 +76,10 @@ export default function TransactionModal() {
   const [wishlistModalVisible,  setWishlistModalVisible]  = useState(false);
   const [dateModalVisible,      setDateModalVisible]      = useState(false);
   const [wishlistSearch,        setWishlistSearch]        = useState('');
+
+  // Vault Transfer States
+  const [isVaultTransfer, setIsVaultTransfer] = useState(false);
+  const [vaultDirection, setVaultDirection] = useState<'to_vault' | 'from_vault'>('to_vault');
 
   // Calendar picker state
   const [calendarYear,  setCalendarYear]  = useState(() => new Date().getFullYear());
@@ -90,9 +101,31 @@ export default function TransactionModal() {
     return activeCategories.find((c) => c.id === selectedCategoryId);
   }, [activeCategories, selectedCategoryId]);
 
+  const availableSubcategories = useMemo(() => {
+    return getSubcategoriesForCategory(selectedCategory?.name);
+  }, [selectedCategory]);
+
   const linkedItem = useMemo(() => {
     return wishlistItems.find((i) => i.id === linkedItemId);
   }, [wishlistItems, linkedItemId]);
+
+  const hourWageText = useMemo(() => {
+    if (transactionType !== 'expense' || !selectedCategoryId || !budgetMonth) return null;
+    const cat = activeCategories.find((c) => c.id === selectedCategoryId);
+    if (!cat) return null;
+    
+    const nameLower = cat.name.toLowerCase();
+    if (!['food', 'drinks', 'shopping'].includes(nameLower)) return null;
+    
+    const amountVal = parseFloat(amountStr);
+    if (isNaN(amountVal) || amountVal <= 0) return null;
+    
+    const salary = Number(budgetMonth.salary_received) || 60000;
+    const hourlyWage = salary / 160; // 160 hours standard work month
+    const hours = (amountVal / hourlyWage).toFixed(1);
+    
+    return `⏳ REQUIRES ${hours} HOURS OF WORK`;
+  }, [amountStr, transactionType, selectedCategoryId, activeCategories, budgetMonth]);
 
   // ─── Load data ───────────────────────────────────────────────────────────
   useEffect(() => {
@@ -122,7 +155,11 @@ export default function TransactionModal() {
       if (isEditMode) {
         // Pre-fill existing transaction values
         if (params.amount)      setAmountStr(String(params.amount));
-        if (params.note)        setNote(String(params.note));
+        if (params.note) {
+          const parsed = parseTransactionNote(String(params.note));
+          setSelectedSubcategory(parsed.subcategory);
+          setNote(parsed.detail || '');
+        }
         if (params.occurred_at) {
           setOccurredAt(String(params.occurred_at));
           const parts = String(params.occurred_at).split('-');
@@ -132,12 +169,19 @@ export default function TransactionModal() {
           }
         }
         // Restore type toggle
-        if (params.type === 'income') {
-          setTransactionType('income');
-          if (params.category_id) setSelectedCategoryId(String(params.category_id));
+        const allCats = [...expCats, ...incCats];
+        const currentCat = allCats.find(c => c.id === params.category_id);
+        if (currentCat && currentCat.name.toLowerCase() === 'savings') {
+          setIsVaultTransfer(true);
+          setVaultDirection(params.type === 'income' ? 'from_vault' : 'to_vault');
         } else {
-          setTransactionType('expense');
-          if (params.category_id) setSelectedCategoryId(String(params.category_id));
+          if (params.type === 'income') {
+            setTransactionType('income');
+            if (params.category_id) setSelectedCategoryId(String(params.category_id));
+          } else {
+            setTransactionType('expense');
+            if (params.category_id) setSelectedCategoryId(String(params.category_id));
+          }
         }
         if (params.linked_item_id && params.linked_item_id !== 'null') {
           setLinkedItemId(String(params.linked_item_id));
@@ -171,11 +215,17 @@ export default function TransactionModal() {
 
   // ─── When toggle changes, clear selected category (it belongs to old type) ─
   const handleToggleType = (newType: 'expense' | 'income') => {
-    if (newType === transactionType) return;
+    setIsVaultTransfer(false);
     setTransactionType(newType);
     setSelectedCategoryId(null);
     // Also clear linked item when switching to income
     if (newType === 'income') setLinkedItemId(null);
+  };
+
+  const handleToggleVaultTransfer = () => {
+    setIsVaultTransfer(true);
+    setSelectedCategoryId(null);
+    setLinkedItemId(null);
   };
 
   // ─── Keypad ──────────────────────────────────────────────────────────────
@@ -205,7 +255,7 @@ export default function TransactionModal() {
       setError('Please enter a valid amount.');
       return;
     }
-    if (!selectedCategoryId) {
+    if (!selectedCategoryId && !isVaultTransfer) {
       setError('Please select a category.');
       return;
     }
@@ -218,35 +268,79 @@ export default function TransactionModal() {
         return;
       }
 
+      let categoryId = selectedCategoryId;
+      let finalType = transactionType;
+      let finalNote = formatTransactionNote(selectedSubcategory, note);
+
+      if (isVaultTransfer) {
+        // Ensure "Savings" category exists
+        const { data: { session } } = await supabase.auth.getSession();
+        if (!session) throw new Error('Not authenticated');
+
+        // Look up Savings category
+        let { data: savingsCat } = await supabase
+          .from('expense_categories')
+          .select('*')
+          .eq('name', 'Savings')
+          .maybeSingle();
+
+        if (!savingsCat) {
+          // Create it dynamically if not found
+          const { data: newCat, error: insertCatErr } = await supabase
+            .from('expense_categories')
+            .insert({
+              name: 'Savings',
+              icon: 'Shield',
+              color: '#10B981',
+              is_default: true,
+              type: 'expense',
+              user_id: session.user.id
+            })
+            .select()
+            .single();
+
+          if (insertCatErr || !newCat) {
+            throw new Error('Failed to create Savings category: ' + (insertCatErr?.message || 'Unknown error'));
+          }
+          savingsCat = newCat;
+        }
+
+        categoryId = savingsCat.id;
+        finalType = vaultDirection === 'to_vault' ? 'expense' : 'income';
+        finalNote = note.trim() || (vaultDirection === 'to_vault' ? 'Transfer to Vault' : 'Transfer from Vault');
+      }
+
       if (isEditMode && params.id) {
         await updateTransaction(String(params.id), {
           amount: amountVal,
-          category_id: selectedCategoryId,
-          note: note.trim() || null,
+          category_id: categoryId!,
+          note: finalNote,
           occurred_at: occurredAt,
-          linked_item_id: transactionType === 'income' ? null : linkedItemId,
-          type: transactionType,
+          linked_item_id: finalType === 'income' ? null : linkedItemId,
+          type: finalType,
         });
+        await refreshData();
+        router.back();
       } else {
         await createTransaction({
           amount: amountVal,
-          category_id: selectedCategoryId,
-          note: note.trim() || null,
+          category_id: categoryId!,
+          note: finalNote,
           occurred_at: occurredAt,
           source: linkedItemId ? 'wishlist_link' : 'manual',
-          linked_item_id: transactionType === 'income' ? null : linkedItemId,
-          type: transactionType,
+          linked_item_id: finalType === 'income' ? null : linkedItemId,
+          type: finalType,
         });
+        await refreshData();
+        router.back();
       }
-      router.back();
     } catch (err: any) {
       setError(err.message || 'Failed to save transaction.');
-    } finally {
       setSubmitting(false);
     }
   };
 
-  const isValid = parseFloat(amountStr) > 0 && selectedCategoryId !== null;
+  const isValid = parseFloat(amountStr) > 0 && (selectedCategoryId !== null || isVaultTransfer);
 
   // ─── Calendar helpers ────────────────────────────────────────────────────
   const daysInMonthList = useMemo(() => {
@@ -307,22 +401,30 @@ export default function TransactionModal() {
             <Text style={styles.closeBtnText}>✕</Text>
           </Pressable>
 
-          {/* Segmented Expense / Income toggle */}
+          {/* Segmented Expense / Income / Vault toggle */}
           <View style={styles.toggleContainer}>
             <Pressable
-              style={[styles.togglePill, transactionType === 'expense' && [styles.togglePillActive, { backgroundColor: typeAccent }]]}
+              style={[styles.togglePill, (!isVaultTransfer && transactionType === 'expense') && [styles.togglePillActive, { backgroundColor: typeAccent }]]}
               onPress={() => handleToggleType('expense')}
             >
-              <Text style={[styles.togglePillText, transactionType === 'expense' && styles.togglePillTextActive]}>
+              <Text style={[styles.togglePillText, (!isVaultTransfer && transactionType === 'expense') && styles.togglePillTextActive]}>
                 EXPENSE
               </Text>
             </Pressable>
             <Pressable
-              style={[styles.togglePill, transactionType === 'income' && [styles.togglePillActive, { backgroundColor: typeAccent }]]}
+              style={[styles.togglePill, (!isVaultTransfer && transactionType === 'income') && [styles.togglePillActive, { backgroundColor: typeAccent }]]}
               onPress={() => handleToggleType('income')}
             >
-              <Text style={[styles.togglePillText, transactionType === 'income' && styles.togglePillTextActive]}>
+              <Text style={[styles.togglePillText, (!isVaultTransfer && transactionType === 'income') && styles.togglePillTextActive]}>
                 INCOME
+              </Text>
+            </Pressable>
+            <Pressable
+              style={[styles.togglePill, isVaultTransfer && [styles.togglePillActive, { backgroundColor: '#10B981' }]]}
+              onPress={handleToggleVaultTransfer}
+            >
+              <Text style={[styles.togglePillText, isVaultTransfer && styles.togglePillTextActive]}>
+                VAULT
               </Text>
             </Pressable>
           </View>
@@ -330,19 +432,51 @@ export default function TransactionModal() {
           <View style={{ width: 40 }} />
         </View>
 
+        {/* Vault Direction Toggle Sub-row */}
+        {isVaultTransfer && (
+          <View style={styles.vaultDirectionWrapper}>
+            <Pressable
+              style={[styles.vaultDirectionPill, vaultDirection === 'to_vault' && styles.vaultDirectionPillActive]}
+              onPress={() => setVaultDirection('to_vault')}
+            >
+              <Text style={[styles.vaultDirectionText, vaultDirection === 'to_vault' && styles.vaultDirectionTextActive]}>
+                💵 TO VAULT
+              </Text>
+            </Pressable>
+            <Pressable
+              style={[styles.vaultDirectionPill, vaultDirection === 'from_vault' && styles.vaultDirectionPillActive]}
+              onPress={() => setVaultDirection('from_vault')}
+            >
+              <Text style={[styles.vaultDirectionText, vaultDirection === 'from_vault' && styles.vaultDirectionTextActive]}>
+                📥 FROM VAULT
+              </Text>
+            </Pressable>
+          </View>
+        )}
+
         {/* 2. Amount display */}
         <View style={styles.amountContainer}>
-          <Text style={[styles.currencySymbol, { color: transactionType === 'income' ? '#22C55E33' : DL.border }]}>₹</Text>
-          <Text style={[styles.amountText, { color: transactionType === 'income' ? '#22C55E' : '#E7E9EE' }]} numberOfLines={1}>
+          <Text style={[styles.currencySymbol, { 
+            color: isVaultTransfer ? 'rgba(16, 185, 129, 0.2)' : transactionType === 'income' ? '#22C55E33' : DL.border 
+          }]}>₹</Text>
+          <Text style={[styles.amountText, { 
+            color: isVaultTransfer ? '#10B981' : transactionType === 'income' ? '#22C55E' : '#E7E9EE' 
+          }]} numberOfLines={1}>
             {amountStr}
           </Text>
         </View>
+
+        {hourWageText && !isVaultTransfer ? (
+          <View style={styles.frictionRow}>
+            <Text style={styles.frictionText}>{hourWageText}</Text>
+          </View>
+        ) : null}
 
         {/* 3. Note input */}
         <View style={styles.noteContainer}>
           <TextInput
             style={styles.noteInput}
-            placeholder={transactionType === 'income' ? 'What did you earn?' : 'What did you buy?'}
+            placeholder={isVaultTransfer ? 'Add notes for this transfer...' : transactionType === 'income' ? 'What did you earn?' : 'What did you buy?'}
             placeholderTextColor={DL.muted}
             value={note}
             onChangeText={setNote}
@@ -358,17 +492,19 @@ export default function TransactionModal() {
           </Pressable>
 
           {/* Category Chip */}
-          <Pressable
-            style={[styles.chip, !selectedCategoryId ? styles.chipUnselected : styles.chipSelected]}
-            onPress={() => setCategoryModalVisible(true)}
-          >
-            <Text style={[styles.chipText, !selectedCategoryId && { color: DL.muted }]}>
-              🏷️ {selectedCategory ? selectedCategory.name : 'Category'}
-            </Text>
-          </Pressable>
+          {!isVaultTransfer && (
+            <Pressable
+              style={[styles.chip, !selectedCategoryId ? styles.chipUnselected : styles.chipSelected]}
+              onPress={() => setCategoryModalVisible(true)}
+            >
+              <Text style={[styles.chipText, !selectedCategoryId && { color: DL.muted }]}>
+                🏷️ {selectedCategory ? selectedCategory.name : 'Category'}
+              </Text>
+            </Pressable>
+          )}
 
-          {/* Link item Chip — hidden for income */}
-          {transactionType === 'expense' && (
+          {/* Link item Chip — hidden for income and vault transfers */}
+          {!isVaultTransfer && transactionType === 'expense' && (
             <View style={styles.linkChipContainer}>
               <Pressable
                 style={[styles.chip, !linkedItemId ? styles.chipUnselected : styles.chipSelected]}
@@ -386,6 +522,38 @@ export default function TransactionModal() {
             </View>
           )}
         </View>
+
+        {/* Subcategories Row */}
+        {!isVaultTransfer && selectedCategory && availableSubcategories.length > 0 && (
+          <View style={styles.subcategoryContainer}>
+            <Text style={styles.subcategoryLabel}>SUBCATEGORY (OPTIONAL)</Text>
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={styles.subcategoryRow}
+            >
+              {availableSubcategories.map((sub) => {
+                const isSelected = selectedSubcategory === sub;
+                return (
+                  <Pressable
+                    key={sub}
+                    style={[styles.subchip, isSelected && styles.subchipSelected]}
+                    onPress={() => setSelectedSubcategory(isSelected ? null : sub)}
+                  >
+                    <Text
+                      style={[
+                        styles.subchipText,
+                        isSelected && styles.subchipTextSelected,
+                      ]}
+                    >
+                      {sub}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </ScrollView>
+          </View>
+        )}
 
         {/* Error */}
         {error && <Text style={styles.errorText}>{error}</Text>}
@@ -621,11 +789,15 @@ const styles = StyleSheet.create({
   },
   toggleContainer: {
     flexDirection: 'row',
-    backgroundColor: '#121519',
-    borderColor: '#1C2026',
+    backgroundColor: '#FFFFFF',
+    borderColor: 'rgba(0, 0, 0, 0.06)',
     borderWidth: 1,
     borderRadius: 20,
     padding: 3,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.02,
+    elevation: 1,
   },
   togglePill: {
     paddingVertical: 6,
@@ -634,7 +806,7 @@ const styles = StyleSheet.create({
     backgroundColor: 'transparent',
   },
   togglePillActive: {
-    backgroundColor: '#8B7CFF',
+    backgroundColor: '#0F172A',
   },
   togglePillText: {
     fontFamily: DLFonts.mono,
@@ -644,7 +816,7 @@ const styles = StyleSheet.create({
     letterSpacing: 1,
   },
   togglePillTextActive: {
-    color: '#0B0D10',
+    color: '#FFFFFF',
   },
   amountContainer: {
     flexDirection: 'row',
@@ -657,14 +829,14 @@ const styles = StyleSheet.create({
   currencySymbol: {
     fontSize: 48,
     fontWeight: '700',
-    color: DL.border,
+    color: '#94A3B8',
     fontFamily: DLFonts.mono,
     marginRight: 6,
   },
   amountText: {
     fontSize: 52,
     fontWeight: 'bold',
-    color: '#E7E9EE',
+    color: '#0F172A',
     fontFamily: DLFonts.mono,
     letterSpacing: -1,
   },
@@ -673,10 +845,10 @@ const styles = StyleSheet.create({
     marginBottom: 15,
   },
   noteInput: {
-    backgroundColor: '#121519',
-    borderColor: '#1C2026',
+    backgroundColor: '#FFFFFF',
+    borderColor: 'rgba(0, 0, 0, 0.08)',
     borderWidth: 1,
-    borderRadius: 12,
+    borderRadius: 14,
     paddingHorizontal: 16,
     paddingVertical: 12,
     fontFamily: DLFonts.sans,
@@ -694,8 +866,8 @@ const styles = StyleSheet.create({
   chip: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#121519',
-    borderColor: '#1C2026',
+    backgroundColor: '#FFFFFF',
+    borderColor: 'rgba(0, 0, 0, 0.08)',
     borderWidth: 1.2,
     borderRadius: 12,
     paddingHorizontal: 10,
@@ -703,10 +875,11 @@ const styles = StyleSheet.create({
   },
   chipSelected: {
     borderStyle: 'solid',
+    borderColor: '#FF5E3A',
   },
   chipUnselected: {
     borderStyle: 'dashed',
-    borderColor: 'rgba(255, 255, 255, 0.15)',
+    borderColor: 'rgba(0, 0, 0, 0.15)',
   },
   chipText: {
     fontFamily: DLFonts.sans,
@@ -747,55 +920,68 @@ const styles = StyleSheet.create({
   },
   keypadKey: {
     flex: 1,
-    backgroundColor: '#121519',
-    borderColor: '#1C2026',
+    backgroundColor: '#FFFFFF',
+    borderColor: 'rgba(0, 0, 0, 0.05)',
     borderWidth: 1,
-    borderRadius: 14,
+    borderRadius: 16,
     paddingVertical: 16,
     alignItems: 'center',
     justifyContent: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.02,
+    elevation: 1,
   },
   keypadKeyText: {
     fontFamily: DLFonts.mono,
-    fontSize: 20,
+    fontSize: 22,
     color: DL.text,
-    fontWeight: '600',
+    fontWeight: '700',
   },
   bottomBar: {
     paddingHorizontal: 20,
     paddingTop: 12,
   },
   saveBtn: {
-    backgroundColor: '#8B7CFF',
-    borderRadius: 16,
+    backgroundColor: '#0F172A',
+    borderRadius: 18,
     paddingVertical: 16,
     alignItems: 'center',
     justifyContent: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.12,
+    shadowRadius: 8,
+    elevation: 4,
   },
   saveBtnDisabled: {
-    backgroundColor: '#1C2026',
+    backgroundColor: '#E2E8F0',
   },
   saveBtnText: {
     fontFamily: DLFonts.mono,
     fontSize: 12,
     fontWeight: 'bold',
-    color: '#0B0D10',
+    color: '#FFFFFF',
     letterSpacing: 1.5,
   },
   // ─── Modals ──────────────────────────────────────────────────────────────
   modalOverlay: {
     flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.75)',
+    backgroundColor: 'rgba(15, 23, 42, 0.5)',
     justifyContent: 'flex-end',
     padding: 16,
   },
   modalContent: {
-    backgroundColor: '#13161C',
+    backgroundColor: '#FFFFFF',
     borderRadius: 24,
     borderWidth: 1,
-    borderColor: '#1C202A',
+    borderColor: 'rgba(0, 0, 0, 0.08)',
     padding: 20,
     maxHeight: '75%',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: -4 },
+    shadowOpacity: 0.1,
+    elevation: 8,
   },
   modalHeader: {
     fontFamily: DLFonts.mono,
@@ -814,8 +1000,8 @@ const styles = StyleSheet.create({
   modalGridItem: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#0B0D10',
-    borderColor: '#1C202A',
+    backgroundColor: '#F8FAFC',
+    borderColor: 'rgba(0, 0, 0, 0.06)',
     borderWidth: 1.2,
     borderRadius: 12,
     paddingHorizontal: 12,
@@ -834,7 +1020,7 @@ const styles = StyleSheet.create({
     fontWeight: '500',
   },
   modalCloseBtn: {
-    backgroundColor: '#1C2026',
+    backgroundColor: '#F1F5F9',
     borderRadius: 12,
     paddingVertical: 12,
     alignItems: 'center',
@@ -848,8 +1034,8 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
   },
   modalSearchInput: {
-    backgroundColor: '#0B0D10',
-    borderColor: '#1C202A',
+    backgroundColor: '#F8FAFC',
+    borderColor: 'rgba(0, 0, 0, 0.08)',
     borderWidth: 1,
     borderRadius: 12,
     paddingHorizontal: 14,
@@ -961,5 +1147,88 @@ const styles = StyleSheet.create({
     fontFamily: DLFonts.sans,
     fontWeight: 'bold',
     textAlign: 'center',
+  },
+  frictionRow: {
+    alignSelf: 'center',
+    backgroundColor: 'rgba(245, 158, 11, 0.08)',
+    borderColor: 'rgba(245, 158, 11, 0.2)',
+    borderWidth: 1,
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 4,
+    marginTop: -8,
+    marginBottom: 8,
+  },
+  frictionText: {
+    color: '#F59E0B',
+    fontFamily: DLFonts.mono,
+    fontSize: 10,
+    letterSpacing: 1,
+    fontWeight: 'bold',
+  },
+  vaultDirectionWrapper: {
+    flexDirection: 'row',
+    alignSelf: 'center',
+    backgroundColor: '#F1F5F9',
+    borderColor: '#E2E8F0',
+    borderWidth: 1,
+    borderRadius: 20,
+    padding: 3,
+    marginTop: 10,
+  },
+  vaultDirectionPill: {
+    paddingVertical: 6,
+    paddingHorizontal: 14,
+    borderRadius: 18,
+    backgroundColor: 'transparent',
+  },
+  vaultDirectionPillActive: {
+    backgroundColor: '#10B981',
+  },
+  vaultDirectionText: {
+    fontFamily: DLFonts.mono,
+    fontSize: 9,
+    fontWeight: 'bold',
+    color: '#64748B',
+    letterSpacing: 1,
+  },
+  vaultDirectionTextActive: {
+    color: '#FFFFFF',
+  },
+  subcategoryContainer: {
+    marginTop: 8,
+    paddingHorizontal: 20,
+  },
+  subcategoryLabel: {
+    fontFamily: DLFonts.mono,
+    fontSize: 9,
+    letterSpacing: 1.5,
+    color: DL.muted,
+    marginBottom: 6,
+  },
+  subcategoryRow: {
+    gap: 8,
+    paddingRight: 10,
+  },
+  subchip: {
+    backgroundColor: 'rgba(255, 255, 255, 0.04)',
+    borderColor: 'rgba(255, 255, 255, 0.1)',
+    borderWidth: 1,
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+  },
+  subchipSelected: {
+    backgroundColor: 'rgba(16, 185, 129, 0.15)',
+    borderColor: '#10B981',
+  },
+  subchipText: {
+    fontFamily: DLFonts.mono,
+    fontSize: 11,
+    color: DL.muted,
+  },
+  subchipTextSelected: {
+    color: '#10B981',
+    fontWeight: '700',
   },
 });
