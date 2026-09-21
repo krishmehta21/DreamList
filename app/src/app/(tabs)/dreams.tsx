@@ -9,7 +9,6 @@ import {
   Pressable,
   Platform,
   Dimensions,
-  Animated,
   Vibration,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -18,22 +17,26 @@ import { LinearGradient } from 'expo-linear-gradient';
 import Reanimated, {
   useSharedValue,
   useAnimatedStyle,
+  useAnimatedRef,
   withTiming,
-  withSpring,
+  withSequence,
+  withRepeat,
+  Easing,
   LinearTransition,
 } from 'react-native-reanimated';
+import Sortable from 'react-native-sortables';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 import { getCachedItems, saveCachedItems, reconcileItems, cleanOrphanedTempItems } from '@/lib/database';
 import { DL, DLFonts, TIER_COLOR } from '@/constants/design';
-import { fetchItems, updateItem, deleteItem, triggerResearch } from '@/lib/api';
+import { fetchItems, updateItem } from '@/lib/api';
 import { FilterChip, ItemCard } from '@/components/dreamlist';
 import { supabase } from '@/lib/supabase';
 import type { WishlistItem, Tier, Category } from '@/lib/types';
-import { TIERS, CATEGORIES } from '@/lib/types';
+import { TIERS } from '@/lib/types';
 import { CustomAlert as Alert } from '@/components/CustomAlert';
 import { PlusIcon, DreamsIcon, CheckIcon, ChevronRightIcon } from '@/components/ui/TabIcons';
-import { CategoryIcon, getCategoryEmoji } from '@/components/ui/CategoryIcon';
+import { CategoryIcon } from '@/components/ui/CategoryIcon';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 const ReanimatedLayoutTransition = LinearTransition.springify().damping(20).stiffness(160);
@@ -54,27 +57,81 @@ function formatCurrency(amount: number): string {
   return `₹${Math.round(amount).toLocaleString('en-IN')}`;
 }
 
+// ─── Apple-Style Wiggle Animation Wrapper ──────────────────────────────────────
+
+const WiggleCard = memo(function WiggleCard({
+  isEditing,
+  index,
+  children,
+  style,
+}: {
+  isEditing: boolean;
+  index: number;
+  children: React.ReactNode;
+  style?: any;
+}) {
+  const rotation = useSharedValue(0);
+
+  useEffect(() => {
+    if (isEditing) {
+      // Natural Apple home screen alternating rotational jiggle
+      const startAngle = index % 2 === 0 ? 1.2 : -1.2;
+      const duration = 120 + (index % 3) * 15;
+      rotation.value = startAngle;
+      rotation.value = withRepeat(
+        withSequence(
+          withTiming(-startAngle, { duration, easing: Easing.inOut(Easing.ease) }),
+          withTiming(startAngle, { duration, easing: Easing.inOut(Easing.ease) })
+        ),
+        -1,
+        true
+      );
+    } else {
+      rotation.value = withTiming(0, { duration: 140 });
+    }
+  }, [isEditing, index, rotation]);
+
+  const animatedStyle = useAnimatedStyle(() => ({
+    transform: [{ rotate: `${rotation.value}deg` }],
+  }));
+
+  return (
+    <Reanimated.View style={[style, animatedStyle]}>
+      {children}
+    </Reanimated.View>
+  );
+});
+
 // ─── Revamped Folder Card Component ───────────────────────────────────────────
 
 interface FolderCardProps {
   category: Category;
   items: WishlistItem[];
+  size: 'compact' | 'wide';
+  editMode: boolean;
   onPressItem: (item: WishlistItem) => void;
   onToggleDone: (id: string, done: boolean) => void;
   onPressFolder: () => void;
+  onToggleSize: () => void;
+  onHideCategory: () => void;
 }
 
 const FolderCard = memo(function FolderCard({
   category,
   items,
+  size,
+  editMode,
   onPressItem,
   onToggleDone,
   onPressFolder,
+  onToggleSize,
+  onHideCategory,
 }: FolderCardProps) {
   const totalCount = items.length;
   const completedCount = items.filter((i) => i.done).length;
   const progressRatio = totalCount > 0 ? completedCount / totalCount : 0;
   const isEmpty = totalCount === 0;
+  const isWide = size === 'wide';
 
   // Calculate sum of active unacquired items in this category
   const categoryActiveTotal = useMemo(() => {
@@ -86,51 +143,80 @@ const FolderCard = memo(function FolderCard({
       }, 0);
   }, [items]);
 
-  // Show up to 4 items in folder preview
-  const displayItems = useMemo(() => items.slice(0, 4), [items]);
+  // Display items: 4 if wide, 2 if compact
+  const maxDisplay = isWide ? 4 : 2;
+  const displayItems = useMemo(() => items.slice(0, maxDisplay), [items, maxDisplay]);
   const extraCount = totalCount - displayItems.length;
 
   return (
-    <View style={styles.folderCard}>
+    <View style={[styles.folderCard, !isWide && styles.folderCardCompact]}>
+      {/* Apple-Style Delete Badge (Top-Left) */}
+      {editMode && (
+        <Pressable
+          style={styles.appleDeleteBadge}
+          onPress={onHideCategory}
+          hitSlop={10}
+        >
+          <Text style={styles.appleDeleteText}>✕</Text>
+        </Pressable>
+      )}
+
+      {/* Apple-Style Widget Size Toggle (Top-Right) */}
+      {editMode && (
+        <Pressable
+          style={styles.appleSizeToggle}
+          onPress={onToggleSize}
+          hitSlop={10}
+        >
+          <Text style={styles.appleSizeToggleText}>
+            {isWide ? '◫' : '▬'}
+          </Text>
+        </Pressable>
+      )}
+
       {/* Folder Header */}
       <Pressable
         style={({ pressed }) => [styles.folderHeader, pressed && styles.rowPressed]}
-        onPress={onPressFolder}
+        onPress={editMode ? undefined : onPressFolder}
         hitSlop={4}
       >
         <View style={styles.folderHeaderLeft}>
-          <CategoryIcon name={category} size={38} fontSize={18} />
+          <CategoryIcon name={category} size={isWide ? 38 : 32} fontSize={isWide ? 18 : 15} />
           <View style={styles.folderTitleColumn}>
             <View style={styles.folderTitleRow}>
-              <Text style={styles.folderTitle}>{category}</Text>
+              <Text style={[styles.folderTitle, !isWide && styles.folderTitleCompact]} numberOfLines={1}>
+                {category}
+              </Text>
               <View style={styles.countBadge}>
                 <Text style={styles.countBadgeText}>{totalCount}</Text>
               </View>
             </View>
             {categoryActiveTotal > 0 ? (
-              <Text style={styles.folderSubPrice}>
-                {formatCurrency(categoryActiveTotal)} needed
+              <Text style={styles.folderSubPrice} numberOfLines={1}>
+                {formatCurrency(categoryActiveTotal)}
               </Text>
             ) : (
-              <Text style={styles.folderSubMuted}>
-                {completedCount > 0 ? `${completedCount} acquired` : 'No active costs'}
+              <Text style={styles.folderSubMuted} numberOfLines={1}>
+                {completedCount > 0 ? `${completedCount} done` : 'Ready'}
               </Text>
             )}
           </View>
         </View>
 
-        <View style={styles.folderHeaderRight}>
-          {totalCount > 0 && (
-            <View style={styles.progressPercentPill}>
-              <Text style={styles.progressPercentText}>
-                {Math.round(progressRatio * 100)}%
-              </Text>
+        {!editMode && isWide && (
+          <View style={styles.folderHeaderRight}>
+            {totalCount > 0 && (
+              <View style={styles.progressPercentPill}>
+                <Text style={styles.progressPercentText}>
+                  {Math.round(progressRatio * 100)}%
+                </Text>
+              </View>
+            )}
+            <View style={styles.chevronWrap}>
+              <ChevronRightIcon color={DL.muted} size={16} />
             </View>
-          )}
-          <View style={styles.chevronWrap}>
-            <ChevronRightIcon color={DL.muted} size={16} />
           </View>
-        </View>
+        )}
       </Pressable>
 
       {/* Mini Progress Track */}
@@ -150,9 +236,9 @@ const FolderCard = memo(function FolderCard({
         {isEmpty ? (
           <Pressable
             style={({ pressed }) => [styles.folderEmptyRow, pressed && styles.rowPressed]}
-            onPress={onPressFolder}
+            onPress={editMode ? undefined : onPressFolder}
           >
-            <Text style={styles.folderEmptyText}>+ Add your first {category.toLowerCase()} dream</Text>
+            <Text style={styles.folderEmptyText}>+ Add {category.toLowerCase()}</Text>
           </Pressable>
         ) : (
           displayItems.map((item) => {
@@ -163,7 +249,7 @@ const FolderCard = memo(function FolderCard({
               <View key={item.id} style={styles.itemRow}>
                 {/* Checkbox */}
                 <Pressable
-                  onPress={() => onToggleDone(item.id, !item.done)}
+                  onPress={editMode ? undefined : () => onToggleDone(item.id, !item.done)}
                   style={styles.checkboxHit}
                   hitSlop={8}
                 >
@@ -173,13 +259,13 @@ const FolderCard = memo(function FolderCard({
                       item.done && styles.customCheckboxDone,
                     ]}
                   >
-                    {item.done && <CheckIcon color="#FFFFFF" size={11} />}
+                    {item.done && <CheckIcon color="#FFFFFF" size={10} />}
                   </View>
                 </Pressable>
 
                 {/* Item Name */}
                 <Pressable
-                  onPress={() => onPressItem(item)}
+                  onPress={editMode ? undefined : () => onPressItem(item)}
                   style={styles.itemNameHit}
                   hitSlop={4}
                 >
@@ -225,14 +311,14 @@ const FolderCard = memo(function FolderCard({
         )}
       </View>
 
-      {/* Folder Footer / View All Link */}
-      {extraCount > 0 && (
+      {/* Folder Footer */}
+      {!editMode && extraCount > 0 && (
         <Pressable
           style={({ pressed }) => [styles.folderFooterBtn, pressed && styles.rowPressed]}
           onPress={onPressFolder}
         >
           <Text style={styles.folderFooterText}>
-            +{extraCount} more · View all in {category} →
+            +{extraCount} more · View {category} →
           </Text>
         </Pressable>
       )}
@@ -246,21 +332,40 @@ export default function DreamsScreen() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const hasLoadedOnce = useRef(false);
+  const scrollableRef = useAnimatedRef<ScrollView>();
+
+  // Layout Widths
+  const horizontalPadding = 18;
+  const gap = 12;
+  const availableWidth = SCREEN_WIDTH - (horizontalPadding * 2);
+  const compactCardWidth = Math.floor((availableWidth - gap) / 2);
+  const wideCardWidth = availableWidth;
 
   // States
   const [items, setItems] = useState<WishlistItem[]>(() => getCachedItems());
   const [tierFilter, setTierFilter] = useState<Tier | null>(null);
   const [viewMode, setViewMode] = useState<'folders' | 'stream'>('folders');
+  const [editMode, setEditMode] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [loading, setLoading] = useState(() => getCachedItems().length === 0);
   const [categoryOrder, setCategoryOrder] = useState<Category[]>(DEFAULT_CATEGORY_ORDER);
+  const [hiddenCategories, setHiddenCategories] = useState<Set<Category>>(new Set());
+
+  // Card size preferences: compact or wide
+  const [cardSizes, setCardSizes] = useState<Record<Category, 'compact' | 'wide'>>({
+    Tech: 'wide',
+    Home: 'compact',
+    Apparel: 'compact',
+    Books: 'compact',
+    Fitness: 'compact',
+    Other: 'wide',
+  });
 
   // Safe tab bar clearance
   const tabBottom = Platform.OS === 'ios' ? Math.max(insets.bottom, 16) : 16;
-  // Position the FAB safely above the 62px floating navigation bar!
   const fabBottom = tabBottom + 74;
 
-  // Load persisted category order
+  // Load persisted category order and sizes
   useEffect(() => {
     AsyncStorage.getItem('dl_category_order').then((val) => {
       if (val) {
@@ -274,7 +379,64 @@ export default function DreamsScreen() {
         } catch {}
       }
     });
+    AsyncStorage.getItem('dl_hidden_categories').then((val) => {
+      if (val) {
+        try {
+          setHiddenCategories(new Set(JSON.parse(val)));
+        } catch {}
+      }
+    });
+    AsyncStorage.getItem('dl_card_sizes').then((val) => {
+      if (val) {
+        try {
+          setCardSizes((prev) => ({ ...prev, ...JSON.parse(val) }));
+        } catch {}
+      }
+    });
   }, []);
+
+  const saveCategoryOrder = useCallback(async (order: Category[]) => {
+    setCategoryOrder(order);
+    await AsyncStorage.setItem('dl_category_order', JSON.stringify(order));
+  }, []);
+
+  const saveCardSizes = useCallback(async (sizes: Record<Category, 'compact' | 'wide'>) => {
+    setCardSizes(sizes);
+    await AsyncStorage.setItem('dl_card_sizes', JSON.stringify(sizes));
+  }, []);
+
+  const handleToggleCardSize = useCallback(
+    (cat: Category) => {
+      Vibration.vibrate(12);
+      const nextSize = cardSizes[cat] === 'wide' ? 'compact' : 'wide';
+      saveCardSizes({ ...cardSizes, [cat]: nextSize });
+    },
+    [cardSizes, saveCardSizes]
+  );
+
+  const handleHideCategory = useCallback(
+    (cat: Category) => {
+      Vibration.vibrate(20);
+      Alert.alert(
+        `Hide ${cat}?`,
+        `This category will be hidden from your dashboard. You can restore it in Settings.`,
+        [
+          { text: 'Cancel', style: 'cancel' },
+          {
+            text: 'Hide',
+            style: 'destructive',
+            onPress: () => {
+              const next = new Set(hiddenCategories);
+              next.add(cat);
+              setHiddenCategories(next);
+              AsyncStorage.setItem('dl_hidden_categories', JSON.stringify([...next]));
+            },
+          },
+        ]
+      );
+    },
+    [hiddenCategories]
+  );
 
   // Fetch Items
   const loadItems = useCallback(async (silent = false) => {
@@ -428,7 +590,7 @@ export default function DreamsScreen() {
       }, 0);
   }, [items]);
 
-  // Group items by category for Folder View
+  // Group items by category for Folder View (filtering out hidden)
   const folderData = useMemo(() => {
     const grouped: Record<string, WishlistItem[]> = {};
     for (const item of filteredItems) {
@@ -437,11 +599,12 @@ export default function DreamsScreen() {
       grouped[cat].push(item);
     }
 
-    return categoryOrder.map((cat) => ({
+    const visibleCats = categoryOrder.filter((cat) => !hiddenCategories.has(cat));
+    return visibleCats.map((cat) => ({
       category: cat,
       items: grouped[cat] || [],
     }));
-  }, [filteredItems, categoryOrder]);
+  }, [filteredItems, categoryOrder, hiddenCategories]);
 
   return (
     <View style={styles.screen}>
@@ -456,52 +619,81 @@ export default function DreamsScreen() {
           <Text style={styles.headerTitle}>Desire Vault</Text>
         </View>
 
-        {/* View Mode Switcher (Folders vs Stream) */}
-        <View style={styles.viewModeSwitcher}>
-          <Pressable
-            style={[
-              styles.viewModeBtn,
-              viewMode === 'folders' && styles.viewModeBtnActive,
-            ]}
-            onPress={() => {
-              Vibration.vibrate(6);
-              setViewMode('folders');
-            }}
-          >
-            <Text
-              style={[
-                styles.viewModeBtnText,
-                viewMode === 'folders' && styles.viewModeBtnTextActive,
-              ]}
+        {/* Right Header Buttons */}
+        <View style={styles.headerRightActions}>
+          {/* Apple-Style Jiggle Done Button */}
+          {editMode ? (
+            <Pressable
+              style={({ pressed }) => [styles.appleDoneBtn, pressed && styles.btnPressed]}
+              onPress={() => {
+                Vibration.vibrate(15);
+                setEditMode(false);
+              }}
             >
-              Folders
-            </Text>
-          </Pressable>
+              <Text style={styles.appleDoneBtnText}>DONE</Text>
+            </Pressable>
+          ) : (
+            <Pressable
+              style={({ pressed }) => [styles.editTriggerBtn, pressed && styles.btnPressed]}
+              onPress={() => {
+                Vibration.vibrate(20);
+                setEditMode(true);
+              }}
+            >
+              <Text style={styles.editTriggerText}>REORDER</Text>
+            </Pressable>
+          )}
 
-          <Pressable
-            style={[
-              styles.viewModeBtn,
-              viewMode === 'stream' && styles.viewModeBtnActive,
-            ]}
-            onPress={() => {
-              Vibration.vibrate(6);
-              setViewMode('stream');
-            }}
-          >
-            <Text
-              style={[
-                styles.viewModeBtnText,
-                viewMode === 'stream' && styles.viewModeBtnTextActive,
-              ]}
-            >
-              All Items
-            </Text>
-          </Pressable>
+          {/* View Mode Switcher (Folders vs Stream) */}
+          {!editMode && (
+            <View style={styles.viewModeSwitcher}>
+              <Pressable
+                style={[
+                  styles.viewModeBtn,
+                  viewMode === 'folders' && styles.viewModeBtnActive,
+                ]}
+                onPress={() => {
+                  Vibration.vibrate(6);
+                  setViewMode('folders');
+                }}
+              >
+                <Text
+                  style={[
+                    styles.viewModeBtnText,
+                    viewMode === 'folders' && styles.viewModeBtnTextActive,
+                  ]}
+                >
+                  Folders
+                </Text>
+              </Pressable>
+
+              <Pressable
+                style={[
+                  styles.viewModeBtn,
+                  viewMode === 'stream' && styles.viewModeBtnActive,
+                ]}
+                onPress={() => {
+                  Vibration.vibrate(6);
+                  setViewMode('stream');
+                }}
+              >
+                <Text
+                  style={[
+                    styles.viewModeBtnText,
+                    viewMode === 'stream' && styles.viewModeBtnTextActive,
+                  ]}
+                >
+                  All Items
+                </Text>
+              </Pressable>
+            </View>
+          )}
         </View>
       </View>
 
       {/* Main Scroll Content */}
       <ScrollView
+        ref={scrollableRef}
         style={styles.scrollContainer}
         contentContainerStyle={[
           styles.scrollContent,
@@ -576,32 +768,43 @@ export default function DreamsScreen() {
         </View>
 
         {/* ─── Filter Chips (Tiers) ────────────────────────────────────────── */}
-        <View style={styles.filterBar}>
-          <ScrollView
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            contentContainerStyle={styles.filterChipScroll}
-          >
-            <FilterChip
-              label={`All (${totalCount})`}
-              active={tierFilter === null}
-              color={DL.text}
-              onPress={() => setTierFilter(null)}
-            />
-            {TIERS.map((t) => {
-              const count = items.filter((i) => i.tier === t).length;
-              return (
-                <FilterChip
-                  key={t}
-                  label={`${t.toUpperCase()} (${count})`}
-                  active={tierFilter === t}
-                  color={TIER_COLOR[t]}
-                  onPress={() => setTierFilter(tierFilter === t ? null : t)}
-                />
-              );
-            })}
-          </ScrollView>
-        </View>
+        {!editMode && (
+          <View style={styles.filterBar}>
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={styles.filterChipScroll}
+            >
+              <FilterChip
+                label={`All (${totalCount})`}
+                active={tierFilter === null}
+                color={DL.text}
+                onPress={() => setTierFilter(null)}
+              />
+              {TIERS.map((t) => {
+                const count = items.filter((i) => i.tier === t).length;
+                return (
+                  <FilterChip
+                    key={t}
+                    label={`${t.toUpperCase()} (${count})`}
+                    active={tierFilter === t}
+                    color={TIER_COLOR[t]}
+                    onPress={() => setTierFilter(tierFilter === t ? null : t)}
+                  />
+                );
+              })}
+            </ScrollView>
+          </View>
+        )}
+
+        {/* Edit Mode Jiggle Instruction Banner */}
+        {editMode && (
+          <View style={styles.jiggleBanner}>
+            <Text style={styles.jiggleBannerText}>
+              ✋ Drag to reorder · Tap ◫ to resize · Tap ✕ to hide
+            </Text>
+          </View>
+        )}
 
         {/* ─── Content Area ────────────────────────────────────────────────── */}
         {loading ? (
@@ -641,19 +844,60 @@ export default function DreamsScreen() {
             </View>
           </View>
         ) : viewMode === 'folders' ? (
-          /* ── View 1: Categorized Folders ── */
-          <Reanimated.View layout={ReanimatedLayoutTransition} style={styles.foldersContainer}>
-            {folderData.map(({ category, items: catItems }) => (
-              <FolderCard
-                key={category}
-                category={category}
-                items={catItems}
-                onPressItem={handlePressItem}
-                onToggleDone={handleToggleDone}
-                onPressFolder={() => handlePressFolder(category)}
-              />
-            ))}
-          </Reanimated.View>
+          /* ── View 1: Categorized Folders with Apple-Style Drag & Reorder ── */
+          <Sortable.Flex
+            scrollableRef={scrollableRef}
+            flexDirection="row"
+            flexWrap="wrap"
+            gap={gap}
+            onDragEnd={({ order }) => {
+              const visibleCats = folderData.map((f) => f.category);
+              const sortedVisible = order(visibleCats);
+              const completeOrder = [
+                ...sortedVisible,
+                ...categoryOrder.filter((c) => !visibleCats.includes(c)),
+              ];
+              saveCategoryOrder(completeOrder);
+            }}
+            dragActivationDelay={editMode ? 60 : 250}
+            activeItemScale={1.05}
+            activeItemOpacity={0.92}
+            activeItemShadowOpacity={0.35}
+            inactiveItemScale={0.98}
+            inactiveItemOpacity={0.78}
+            hapticsEnabled={true}
+          >
+            {folderData.map(({ category, items: catItems }, index) => {
+              const size = cardSizes[category] || 'wide';
+              const isWide = size === 'wide';
+              const itemWidth = isWide ? wideCardWidth : compactCardWidth;
+
+              return (
+                <Sortable.Touchable
+                  key={category}
+                  onLongPress={() => {
+                    Vibration.vibrate(30);
+                    setEditMode(true);
+                  }}
+                  style={{ width: itemWidth }}
+                >
+                  <WiggleCard isEditing={editMode} index={index}>
+                    <FolderCard
+                      category={category}
+                      items={catItems}
+                      size={size}
+                      editMode={editMode}
+                      onPressItem={handlePressItem}
+                      onToggleDone={handleToggleDone}
+                      onPressFolder={() => handlePressFolder(category)}
+                      onToggleSize={() => handleToggleCardSize(category)}
+                      onHideCategory={() => handleHideCategory(category)}
+                    />
+                  </WiggleCard>
+                </Sortable.Touchable>
+              );
+            })}
+          </Sortable.Flex>
         ) : (
           /* ── View 2: Stream of All Items ── */
           <Reanimated.View layout={ReanimatedLayoutTransition} style={styles.streamContainer}>
@@ -670,29 +914,31 @@ export default function DreamsScreen() {
         )}
       </ScrollView>
 
-      {/* ─── Floating Action Button (Prominent, Safely Elevated Above Tab Bar) ─── */}
-      <Pressable
-        style={({ pressed }) => [
-          styles.floatingAddBtn,
-          { bottom: fabBottom },
-          pressed && styles.btnPressed,
-        ]}
-        onPress={() => {
-          Vibration.vibrate(15);
-          router.push('/add');
-        }}
-        hitSlop={8}
-      >
-        <LinearGradient
-          colors={['#06B6D4', '#4F46E5', '#A855F7']}
-          start={{ x: 0, y: 0 }}
-          end={{ x: 1, y: 1 }}
-          style={styles.floatingAddGradient}
+      {/* ─── Floating Action Button (Safely Elevated Above Tab Bar) ─────────── */}
+      {!editMode && (
+        <Pressable
+          style={({ pressed }) => [
+            styles.floatingAddBtn,
+            { bottom: fabBottom },
+            pressed && styles.btnPressed,
+          ]}
+          onPress={() => {
+            Vibration.vibrate(15);
+            router.push('/add');
+          }}
+          hitSlop={8}
         >
-          <PlusIcon color="#FFFFFF" size={20} />
-          <Text style={styles.floatingAddLabel}>NEW DREAM</Text>
-        </LinearGradient>
-      </Pressable>
+          <LinearGradient
+            colors={['#06B6D4', '#4F46E5', '#A855F7']}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 1 }}
+            style={styles.floatingAddGradient}
+          >
+            <PlusIcon color="#FFFFFF" size={20} />
+            <Text style={styles.floatingAddLabel}>NEW DREAM</Text>
+          </LinearGradient>
+        </Pressable>
+      )}
     </View>
   );
 }
@@ -705,7 +951,7 @@ const styles = StyleSheet.create({
     backgroundColor: DL.bg,
   },
 
-  // Ambient glowing circles for fintech depth
+  // Ambient glowing circles for depth
   ambientTopRight: {
     position: 'absolute',
     top: -50,
@@ -727,7 +973,7 @@ const styles = StyleSheet.create({
 
   // Header
   header: {
-    paddingHorizontal: 20,
+    paddingHorizontal: 18,
     paddingBottom: 12,
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -751,6 +997,44 @@ const styles = StyleSheet.create({
     color: DL.text,
     letterSpacing: -0.5,
   },
+  headerRightActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  appleDoneBtn: {
+    backgroundColor: '#4F46E5',
+    paddingHorizontal: 16,
+    paddingVertical: 7,
+    borderRadius: 18,
+    shadowColor: '#4F46E5',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.3,
+    shadowRadius: 6,
+    elevation: 4,
+  },
+  appleDoneBtnText: {
+    fontFamily: DLFonts.sans,
+    fontSize: 12,
+    fontWeight: '900',
+    color: '#FFFFFF',
+    letterSpacing: 0.8,
+  },
+  editTriggerBtn: {
+    backgroundColor: '#FFFFFF',
+    borderColor: 'rgba(226, 232, 240, 0.9)',
+    borderWidth: 1,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 16,
+  },
+  editTriggerText: {
+    fontFamily: DLFonts.mono,
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#64748B',
+    letterSpacing: 0.5,
+  },
 
   // View mode switcher pill
   viewModeSwitcher: {
@@ -762,7 +1046,7 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(226, 232, 240, 0.8)',
   },
   viewModeBtn: {
-    paddingHorizontal: 12,
+    paddingHorizontal: 11,
     paddingVertical: 6,
     borderRadius: 16,
   },
@@ -776,7 +1060,7 @@ const styles = StyleSheet.create({
   },
   viewModeBtnText: {
     fontFamily: DLFonts.sans,
-    fontSize: 11.5,
+    fontSize: 11,
     fontWeight: '700',
     color: '#64748B',
   },
@@ -885,7 +1169,7 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
 
-  // ─── Filter Bar ─────────────────────────────────────────────────────────────
+  // Filter Bar
   filterBar: {
     marginBottom: 14,
   },
@@ -894,10 +1178,25 @@ const styles = StyleSheet.create({
     paddingVertical: 2,
   },
 
-  // ─── Folders Container ──────────────────────────────────────────────────────
-  foldersContainer: {
-    gap: 14,
+  // Edit Jiggle Instruction Banner
+  jiggleBanner: {
+    backgroundColor: 'rgba(79, 70, 229, 0.08)',
+    borderColor: 'rgba(79, 70, 229, 0.25)',
+    borderWidth: 1,
+    borderRadius: 12,
+    paddingVertical: 8,
+    paddingHorizontal: 14,
+    alignItems: 'center',
+    marginBottom: 14,
   },
+  jiggleBannerText: {
+    fontFamily: DLFonts.sans,
+    fontSize: 11.5,
+    fontWeight: '700',
+    color: '#4F46E5',
+  },
+
+  // ─── Folder Card (Apple Home Style) ─────────────────────────────────────────
   folderCard: {
     backgroundColor: '#FFFFFF',
     borderRadius: 22,
@@ -910,17 +1209,76 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.05,
     shadowRadius: 10,
     elevation: 3,
+    position: 'relative',
   },
+  folderCardCompact: {
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+    minHeight: 140,
+  },
+
+  // Apple-Style Corner Badges
+  appleDeleteBadge: {
+    position: 'absolute',
+    top: -8,
+    left: -8,
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: '#EF4444',
+    borderWidth: 2,
+    borderColor: '#FFFFFF',
+    alignItems: 'center',
+    justifyContent: 'center',
+    zIndex: 100,
+    shadowColor: '#EF4444',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.35,
+    shadowRadius: 4,
+    elevation: 6,
+  },
+  appleDeleteText: {
+    color: '#FFFFFF',
+    fontSize: 11,
+    fontWeight: '900',
+    lineHeight: 12,
+  },
+  appleSizeToggle: {
+    position: 'absolute',
+    top: -8,
+    right: -8,
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: '#4F46E5',
+    borderWidth: 2,
+    borderColor: '#FFFFFF',
+    alignItems: 'center',
+    justifyContent: 'center',
+    zIndex: 100,
+    shadowColor: '#4F46E5',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.35,
+    shadowRadius: 4,
+    elevation: 6,
+  },
+  appleSizeToggleText: {
+    color: '#FFFFFF',
+    fontSize: 12,
+    fontWeight: '900',
+    lineHeight: 14,
+  },
+
   folderHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    paddingBottom: 10,
+    paddingBottom: 8,
   },
   folderHeaderLeft: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 12,
+    gap: 10,
     flex: 1,
   },
   folderTitleColumn: {
@@ -934,31 +1292,34 @@ const styles = StyleSheet.create({
   },
   folderTitle: {
     fontFamily: DLFonts.sans,
-    fontSize: 16,
+    fontSize: 15.5,
     fontWeight: '800',
     color: '#0B132B',
+  },
+  folderTitleCompact: {
+    fontSize: 13.5,
   },
   countBadge: {
     backgroundColor: '#F1F5F9',
     borderRadius: 8,
-    paddingHorizontal: 6,
+    paddingHorizontal: 5,
     paddingVertical: 1,
   },
   countBadgeText: {
     fontFamily: DLFonts.mono,
-    fontSize: 10,
+    fontSize: 9.5,
     fontWeight: '700',
     color: '#64748B',
   },
   folderSubPrice: {
     fontFamily: DLFonts.mono,
-    fontSize: 11,
+    fontSize: 10.5,
     fontWeight: '700',
     color: '#D97706',
   },
   folderSubMuted: {
     fontFamily: DLFonts.sans,
-    fontSize: 11,
+    fontSize: 10.5,
     color: '#94A3B8',
   },
   folderHeaderRight: {
@@ -974,7 +1335,7 @@ const styles = StyleSheet.create({
   },
   progressPercentText: {
     fontFamily: DLFonts.mono,
-    fontSize: 10,
+    fontSize: 9.5,
     fontWeight: '800',
     color: '#4F46E5',
   },
@@ -987,7 +1348,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#F1F5F9',
     borderRadius: 1.5,
     overflow: 'hidden',
-    marginBottom: 10,
+    marginBottom: 8,
   },
   miniProgressFill: {
     height: '100%',
@@ -999,13 +1360,13 @@ const styles = StyleSheet.create({
     gap: 2,
   },
   folderEmptyRow: {
-    paddingVertical: 12,
+    paddingVertical: 10,
     alignItems: 'center',
     justifyContent: 'center',
   },
   folderEmptyText: {
     fontFamily: DLFonts.sans,
-    fontSize: 12.5,
+    fontSize: 12,
     color: '#6366F1',
     fontWeight: '600',
   },
@@ -1013,15 +1374,15 @@ const styles = StyleSheet.create({
   itemRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingVertical: 7,
+    paddingVertical: 5,
   },
   checkboxHit: {
-    paddingRight: 10,
+    paddingRight: 8,
   },
   customCheckbox: {
-    width: 18,
-    height: 18,
-    borderRadius: 6,
+    width: 17,
+    height: 17,
+    borderRadius: 5,
     borderWidth: 1.6,
     borderColor: '#CBD5E1',
     backgroundColor: '#FFFFFF',
@@ -1034,11 +1395,11 @@ const styles = StyleSheet.create({
   },
   itemNameHit: {
     flex: 1,
-    paddingRight: 8,
+    paddingRight: 6,
   },
   itemNameText: {
     fontFamily: DLFonts.sans,
-    fontSize: 13.5,
+    fontSize: 13,
     color: '#1E293B',
     fontWeight: '600',
   },
@@ -1049,11 +1410,11 @@ const styles = StyleSheet.create({
   itemRightWrap: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
+    gap: 5,
   },
   itemPriceText: {
     fontFamily: DLFonts.mono,
-    fontSize: 11.5,
+    fontSize: 11,
     fontWeight: '700',
     color: '#0F172A',
   },
@@ -1062,24 +1423,24 @@ const styles = StyleSheet.create({
   },
   researchBadge: {
     backgroundColor: 'rgba(139, 92, 246, 0.12)',
-    borderRadius: 6,
-    paddingHorizontal: 6,
-    paddingVertical: 2,
+    borderRadius: 5,
+    paddingHorizontal: 5,
+    paddingVertical: 1.5,
   },
   researchBadgeText: {
     fontFamily: DLFonts.mono,
-    fontSize: 9.5,
+    fontSize: 9,
     fontWeight: '800',
     color: '#7C3AED',
   },
   tierDot: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
+    width: 5,
+    height: 5,
+    borderRadius: 2.5,
   },
 
   folderFooterBtn: {
-    paddingTop: 10,
+    paddingTop: 8,
     paddingBottom: 2,
     alignItems: 'center',
     borderTopWidth: 1,
@@ -1088,7 +1449,7 @@ const styles = StyleSheet.create({
   },
   folderFooterText: {
     fontFamily: DLFonts.sans,
-    fontSize: 11.5,
+    fontSize: 11,
     fontWeight: '700',
     color: '#4F46E5',
   },
@@ -1137,7 +1498,7 @@ const styles = StyleSheet.create({
     letterSpacing: 0.8,
   },
 
-  // ─── Loading & Empty States ─────────────────────────────────────────────────
+  // Loading & Empty States
   loadingContainer: {
     paddingVertical: 60,
     alignItems: 'center',
@@ -1214,7 +1575,7 @@ const styles = StyleSheet.create({
 
   // Interactions
   btnPressed: {
-    opacity: 0.88,
+    opacity: 0.82,
     transform: [{ scale: 0.96 }],
   },
   rowPressed: {
