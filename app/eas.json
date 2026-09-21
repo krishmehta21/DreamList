@@ -7,7 +7,7 @@
       "developmentClient": true,
       "distribution": "internal"
     },
-    "preview": {
+    "preview": { "android": { "buildType": "apk" },
       "distribution": "internal",
       "env": {
         "EXPO_PUBLIC_API_URL": "https://dreamlist-backend-krish.onrender.com",
