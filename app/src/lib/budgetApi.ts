@@ -57,43 +57,6 @@ export async function initializeBudgetMonth(
 
   if (budgetError) throw budgetError;
 
-  // Proactive Salary Transaction Logging:
-  // Check if a Salary category exists under income type
-  const { data: catData, error: catError } = await supabase
-    .from('expense_categories')
-    .select('id')
-    .eq('name', 'Salary')
-    .eq('type', 'income')
-    .eq('is_default', true)
-    .maybeSingle();
-
-  if (!catError && catData) {
-    // Check if salary transaction is already logged for this month
-    const { data: existingTx, error: txCheckError } = await supabase
-      .from('transactions')
-      .select('id')
-      .eq('user_id', session.user.id)
-      .eq('category_id', catData.id)
-      .gte('occurred_at', startDate)
-      .lte('occurred_at', `${monthStr}-31`)
-      .maybeSingle();
-
-    if (!txCheckError && !existingTx) {
-      // Create salary transaction
-      await supabase.from('transactions').insert([
-        {
-          user_id: session.user.id,
-          amount: salary,
-          category_id: catData.id,
-          note: 'Monthly Salary (Auto-logged)',
-          occurred_at: startDate,
-          source: 'manual',
-          type: 'income',
-        },
-      ]);
-    }
-  }
-
   return budgetMonth;
 }
 

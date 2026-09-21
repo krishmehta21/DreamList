@@ -278,47 +278,26 @@ export const BudgetProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
   // Derived Budget calculations (Allowance, Spent, Remaining, Safe Spend, Category Limits)
   const budgetState = useMemo<DerivedBudgetState>(() => {
-    if (!budgetMonth) {
-      return {
-        allowance: 0,
-        spent: 0,
-        remaining: 0,
-        percentRemaining: 0,
-        dailySafeSpend: 0,
-        categories: []
-      };
-    }
-
     const savingsCat = categories.find(c => c.name.toLowerCase() === 'savings');
 
-    // actualIncome = sum of all income transactions that are NOT Savings
+    // actualIncome = sum of all income transactions (excluding pure savings transfers)
     const actualIncome = transactions
       .filter(tx => tx.type === 'income' && (!savingsCat || tx.category_id !== savingsCat.id))
       .reduce((sum, tx) => sum + Number(tx.amount), 0);
 
-    const plannedIncome = Number(budgetMonth.salary_received || budgetMonth.spendable_allowance || 0);
-    const effectiveIncome = actualIncome > 0 ? actualIncome : plannedIncome;
-
-    // toVault = sum of all expense transactions of category Savings
-    const toVault = transactions
-      .filter(tx => tx.type === 'expense' && !tx.is_ghost && savingsCat && tx.category_id === savingsCat.id)
-      .reduce((sum, tx) => sum + Number(tx.amount), 0);
-
-    // fromVault = sum of all income transactions of category Savings
-    const fromVault = transactions
-      .filter(tx => tx.type === 'income' && savingsCat && tx.category_id === savingsCat.id)
-      .reduce((sum, tx) => sum + Number(tx.amount), 0);
-
-    // allowance: total spendable income available this cycle after vault movements
-    const allowance = effectiveIncome - toVault + fromVault;
-    
-    // spent = sum of all expense transactions that are NOT Savings and NOT ghost
+    // spent = sum of all expense transactions (excluding pure savings transfers and ghost items)
     const spent = transactions
       .filter(tx => tx.type === 'expense' && !tx.is_ghost && (!savingsCat || tx.category_id !== savingsCat.id))
       .reduce((sum, tx) => sum + Number(tx.amount), 0);
 
+    // Base allowance is the actual income logged. Only fall back to planned salary if explicitly configured.
+    // Never inject an artificial default salary!
+    const plannedSalary = budgetMonth?.salary_received ? Number(budgetMonth.salary_received) : 0;
+    const allowance = actualIncome > 0 ? actualIncome : plannedSalary;
+
+    // Remaining cash balance is allowance - spent
     const remaining = allowance - spent;
-    const percentRemaining = allowance > 0 ? (remaining / allowance) * 100 : 0;
+    const percentRemaining = allowance > 0 ? Math.max(0, (remaining / allowance) * 100) : 0;
 
     // Daily safe spend: remaining budget / days left in month
     const [year, month] = activeMonth.split('-').map(Number);
@@ -427,8 +406,8 @@ export const BudgetProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       .filter(tx => tx.type === 'income' && (!savingsCat || tx.category_id !== savingsCat.id))
       .reduce((sum, tx) => sum + Number(tx.amount), 0);
 
-    const plannedIncome = Number(budgetMonth.salary_received || budgetMonth.spendable_allowance || 0);
-    const effectiveIncome = actualIncome > 0 ? actualIncome : plannedIncome;
+    const plannedSalary = budgetMonth?.salary_received ? Number(budgetMonth.salary_received) : 0;
+    const effectiveIncome = actualIncome > 0 ? actualIncome : plannedSalary;
 
     const spent = transactions
       .filter(tx => tx.type === 'expense' && !tx.is_ghost && (!savingsCat || tx.category_id !== savingsCat.id))
@@ -924,7 +903,7 @@ export const BudgetProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       const lastDay = new Date(year, m, 0).getDate();
       const endDate = `${targetMonth}-${String(lastDay).padStart(2, '0')}`;
 
-      // Delete all transactions within this month range
+      // 1. Delete all transactions within this month range
       const { error: delErr } = await supabase
         .from('transactions')
         .delete()
@@ -933,6 +912,19 @@ export const BudgetProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         .lte('occurred_at', endDate);
 
       if (delErr) throw delErr;
+
+      // 2. Delete the budget_month record for this month so no default salary or blueprint persists
+      await supabase
+        .from('budget_month')
+        .delete()
+        .eq('user_id', session.user.id)
+        .eq('calendar_month', startDate);
+
+      // 3. Clear local state for this month
+      setBudgetMonth(null);
+      setCategoryLimits([]);
+      setActiveRecoveryPlan(null);
+      setTransactions([]);
 
       await loadData(targetMonth);
     } catch (err) {
