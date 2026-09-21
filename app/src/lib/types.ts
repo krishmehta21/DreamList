@@ -34,10 +34,12 @@ export interface ItemResearch {
   researched_at: string;
 }
 
+export type PriceSource = 'amazon' | 'flipkart' | 'ikea' | 'meesho' | 'myntra' | 'ajio' | 'croma' | 'reliance' | 'tatacliq' | 'nykaa' | 'official' | 'other' | 'manual' | (string & {});
+
 export interface ItemPrice {
   id: string;
   item_id: string;
-  source: 'amazon' | 'flipkart' | 'official' | 'other' | 'manual';
+  source: PriceSource;
   price: number;
   currency: string;
   url: string | null;

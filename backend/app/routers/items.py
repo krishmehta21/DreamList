@@ -170,12 +170,13 @@ def run_background_research(item_id: str, item_name: str, user_id: str):
             "model": research_data.get("model"),
             "summary": research_data.get("summary"),
             "specs": specs_data,
+            "image_url": research_data.get("image_url"),
             "confidence": confidence_val
         }
         service_client.table("item_research").insert(research_row).execute()
         
         # 5. Insert live prices list
-        from app.services.research_service import validate_price_entry
+        from app.services.research_service import validate_price_entry, detect_platform_from_url
         prices_list = research_data.get("prices", [])
         brand = research_data.get("brand")
         inserted_prices_count = 0
@@ -202,9 +203,19 @@ def run_background_research(item_id: str, item_name: str, user_id: str):
             service_client.table("item_prices").insert(price_row).execute()
             inserted_prices_count += 1
             
-        # If the user shared a direct link, but we failed to validate any price entries, fail the research run.
+        # If user shared a direct link and no external prices validated, ensure the direct link itself is preserved
         if manual_link and inserted_prices_count == 0:
-            raise ValueError(f"No valid price entries could be extracted/validated from the shared link: {manual_link}")
+            detected_src = detect_platform_from_url(manual_link)
+            fallback_price_row = {
+                "item_id": item_id,
+                "source": detected_src,
+                "price": float(research_data.get("best_price", {}).get("price") or 0) if isinstance(research_data.get("best_price"), dict) else 0.0,
+                "currency": "INR",
+                "url": manual_link,
+                "in_stock": True
+            }
+            service_client.table("item_prices").insert(fallback_price_row).execute()
+            inserted_prices_count += 1
             
         # 6. Mark status as ready
         service_client.table("wishlist_items") \

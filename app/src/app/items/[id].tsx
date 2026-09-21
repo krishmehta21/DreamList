@@ -34,6 +34,17 @@ import { getCachedItems, updateCachedItem, deleteCachedItem, cleanOrphanedTempIt
 const SOURCE_ICONS: Record<string, string> = {
   amazon: '📦 AMAZON',
   flipkart: '🛒 FLIPKART',
+  ikea: '🛋️ IKEA',
+  meesho: '🛍️ MEESHO',
+  myntra: '👗 MYNTRA',
+  ajio: '🧥 AJIO',
+  tatacliq: '💎 TATA CLIQ',
+  croma: '⚡ CROMA',
+  reliance: '📱 RELIANCE',
+  vijay: '📺 VIJAY SALES',
+  nykaa: '💄 NYKAA',
+  blinkit: '⚡ BLINKIT',
+  zepto: '🚀 ZEPTO',
   official: '🌐 OFFICIAL',
   manual: '👤 ADDED BY YOU',
   other: '🏷️ OTHER',
@@ -726,6 +737,18 @@ export default function ItemDetailScreen() {
         </View>
       ) : (
         <>
+          {/* Hero Product Image Banner */}
+          {item.research?.[0]?.image_url ? (
+            <View style={styles.heroImageCard}>
+              <Image
+                source={{ uri: item.research[0].image_url }}
+                style={styles.heroImage}
+                contentFit="contain"
+                transition={300}
+              />
+            </View>
+          ) : null}
+
           {/* Item name */}
           <Text style={styles.itemName}>{item.name}</Text>
 
@@ -1175,6 +1198,24 @@ const styles = StyleSheet.create({
     color: DL.muted,
     fontSize: 15,
     fontFamily: DLFonts.sans,
+  },
+  heroImageCard: {
+    width: '100%',
+    height: 190,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: DL.border,
+    padding: 12,
+    marginBottom: 16,
+    justifyContent: 'center',
+    alignItems: 'center',
+    overflow: 'hidden',
+  },
+  heroImage: {
+    width: '100%',
+    height: '100%',
+    borderRadius: 12,
   },
   itemName: {
     fontSize: 26,
