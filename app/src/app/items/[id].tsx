@@ -50,23 +50,37 @@ const SOURCE_ICONS: Record<string, string> = {
   other: '🏷️ OTHER',
 };
 
-function getAffiliateUrl(source: string, originalUrl: string): string {
-  if (!originalUrl) return '';
-  const hasQuery = originalUrl.includes('?');
-  const separator = hasQuery ? '&' : '?';
-  
-  if (source === 'amazon') {
-    // SWAP: Replace 'dreamlist-21' with your active Amazon associate tag ID
-    if (!originalUrl.includes('tag=')) {
-      return `${originalUrl}${separator}tag=dreamlist-21`;
-    }
-  } else if (source === 'flipkart') {
-    // SWAP: Replace 'dreamlist_aff' with your Flipkart affiliate account ID
-    if (!originalUrl.includes('affid=')) {
-      return `${originalUrl}${separator}affid=dreamlist_aff`;
-    }
+function getCleanRetailerUrl(source: string, originalUrl: string, itemName?: string): string {
+  const query = encodeURIComponent(itemName || 'product');
+  const isBroken = !originalUrl || 
+    originalUrl.includes('B084Z6T721') || 
+    originalUrl.includes('itm5a3b97b102808') || 
+    originalUrl.includes('example.com') ||
+    originalUrl.includes('YOUR_ASIN');
+
+  if (isBroken) {
+    if (source === 'amazon') return `https://www.amazon.in/s?k=${query}`;
+    if (source === 'flipkart') return `https://www.flipkart.com/search?q=${query}`;
+    if (source === 'ikea') return `https://www.ikea.com/in/en/search/?q=${query}`;
+    if (source === 'meesho') return `https://www.meesho.com/search?q=${query}`;
+    if (source === 'myntra') return `https://www.myntra.com/${query}`;
+    if (source === 'croma') return `https://www.croma.com/searchB?q=${query}`;
+    if (source === 'reliance') return `https://www.reliancedigital.in/search?q=${query}`;
   }
-  return originalUrl;
+
+  if (!originalUrl) return '';
+
+  let clean = originalUrl.trim();
+  if (!clean.startsWith('http://') && !clean.startsWith('https://')) {
+    clean = `https://${clean}`;
+  }
+  
+  // Clean placeholder query strings that break retailer routing
+  clean = clean.replace(/([?&])tag=dreamlist-21(&|$)/, '$1')
+               .replace(/([?&])affid=dreamlist_aff(&|$)/, '$1')
+               .replace(/[?&]$/, '');
+
+  return clean;
 }
 
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
@@ -342,16 +356,17 @@ export default function ItemDetailScreen() {
   };
 
   const handleOpenLink = async (source: string, url: string) => {
-    const affiliateUrl = getAffiliateUrl(source, url);
+    const cleanUrl = getCleanRetailerUrl(source, url, item?.name);
+    if (!cleanUrl) return;
     try {
-      await WebBrowser.openBrowserAsync(affiliateUrl, {
+      await WebBrowser.openBrowserAsync(cleanUrl, {
         dismissButtonStyle: 'close',
-        toolbarColor: DL.card,
-        controlsColor: DL.text,
+        toolbarColor: '#FFFFFF',
+        controlsColor: DL.accent,
         createTask: false,
       });
     } catch {
-      Linking.openURL(affiliateUrl);
+      Linking.openURL(cleanUrl);
     }
   };
 
@@ -532,12 +547,20 @@ export default function ItemDetailScreen() {
     ]);
   };
 
+  const handleBack = () => {
+    if (router.canGoBack()) {
+      router.back();
+    } else {
+      router.replace('/');
+    }
+  };
+
   // --- Loading skeleton ---
   if (loading) {
     return (
       <View style={[styles.screen, { paddingTop: insets.top + 12 }]}>
         <View style={[styles.detailHeader, { paddingHorizontal: 20 }]}>
-          <Pressable onPress={() => router.back()} style={styles.circularBackBtn} hitSlop={8}>
+          <Pressable onPress={handleBack} style={styles.circularBackBtn} hitSlop={12}>
             <Text style={styles.circularBackText}>←</Text>
           </Pressable>
           <Text style={styles.detailHeaderTitle}>Item Details</Text>
@@ -560,7 +583,7 @@ export default function ItemDetailScreen() {
     return (
       <View style={[styles.screen, { paddingTop: insets.top + 12 }]}>
         <View style={[styles.detailHeader, { paddingHorizontal: 20 }]}>
-          <Pressable onPress={() => router.back()} style={styles.circularBackBtn} hitSlop={8}>
+          <Pressable onPress={handleBack} style={styles.circularBackBtn} hitSlop={12}>
             <Text style={styles.circularBackText}>←</Text>
           </Pressable>
           <Text style={styles.detailHeaderTitle}>Item Details</Text>
@@ -580,7 +603,7 @@ export default function ItemDetailScreen() {
     return (
       <View style={[styles.screen, { paddingTop: insets.top + 12 }]}>
         <View style={[styles.detailHeader, { paddingHorizontal: 20 }]}>
-          <Pressable onPress={() => router.back()} style={styles.circularBackBtn} hitSlop={8}>
+          <Pressable onPress={handleBack} style={styles.circularBackBtn} hitSlop={12}>
             <Text style={styles.circularBackText}>←</Text>
           </Pressable>
           <Text style={styles.detailHeaderTitle}>Item Details</Text>
@@ -600,7 +623,7 @@ export default function ItemDetailScreen() {
     >
       {/* Header Bar */}
       <View style={styles.detailHeader}>
-        <Pressable onPress={() => router.back()} style={styles.circularBackBtn} hitSlop={8}>
+        <Pressable onPress={handleBack} style={styles.circularBackBtn} hitSlop={12}>
           <Text style={styles.circularBackText}>←</Text>
         </Pressable>
         <Text style={styles.detailHeaderTitle}>Item Details</Text>
@@ -1153,11 +1176,16 @@ const styles = StyleSheet.create({
     width: 38,
     height: 38,
     borderRadius: 19,
-    backgroundColor: 'rgba(255, 255, 255, 0.03)',
+    backgroundColor: '#FFFFFF',
     borderColor: DL.border,
     borderWidth: 1,
     justifyContent: 'center',
     alignItems: 'center',
+    shadowColor: '#64748B',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.08,
+    shadowRadius: 4,
+    elevation: 1,
   },
   circularBackText: {
     color: DL.text,

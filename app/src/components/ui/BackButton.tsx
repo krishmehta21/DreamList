@@ -16,8 +16,10 @@ export function BackButton({ onPress, label, style }: BackButtonProps) {
   const handlePress = () => {
     if (onPress) {
       onPress();
-    } else {
+    } else if (router.canGoBack()) {
       router.back();
+    } else {
+      router.replace('/');
     }
   };
 
@@ -46,17 +48,22 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
-    backgroundColor: 'rgba(255, 255, 255, 0.05)',
-    borderColor: 'rgba(255, 255, 255, 0.1)',
+    backgroundColor: '#FFFFFF',
+    borderColor: DL.border,
     borderWidth: 1,
     borderRadius: 20,
     paddingHorizontal: 12,
     paddingVertical: 7,
     alignSelf: 'flex-start',
+    shadowColor: '#64748B',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.08,
+    shadowRadius: 4,
+    elevation: 1,
   },
   btnPressed: {
-    backgroundColor: 'rgba(255, 255, 255, 0.12)',
-    transform: [{ scale: 0.97 }],
+    backgroundColor: '#F1F5F9',
+    transform: [{ scale: 0.96 }],
   },
   label: {
     fontFamily: DLFonts.mono,

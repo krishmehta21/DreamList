@@ -4,7 +4,7 @@
     "slug": "app",
     "version": "1.0.0",
     "orientation": "portrait",
-    "backgroundColor": "#0B0D10",
+    "backgroundColor": "#F0F4FC",
     "icon": "./assets/images/icon.png",
     "scheme": "app",
     "userInterfaceStyle": "automatic",
@@ -14,7 +14,7 @@
     "android": {
       "package": "com.krishmehta21.dreamlist",
       "adaptiveIcon": {
-        "backgroundColor": "#0B0D10",
+        "backgroundColor": "#F0F4FC",
         "foregroundImage": "./assets/images/android-icon-foreground.png",
         "backgroundImage": "./assets/images/android-icon-background.png",
         "monochromeImage": "./assets/images/android-icon-monochrome.png"

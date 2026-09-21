@@ -553,6 +553,7 @@ def run_research(item_name: str, manual_link: Optional[str] = None) -> dict:
                     )
                     if is_valid:
                         p["source"] = normalized_source
+                        p["url"] = sanitize_retailer_url(normalized_source, url, item_name)
                         valid_prices.append(p)
                     else:
                         logger.warning(f"run_research: Price entry REJECTED ({src} -> {url}): {reject_reason}")
@@ -635,6 +636,39 @@ def _run_research_internal_with_retry(
                 logger.error(f"Non-retryable error during Gemini call: {str(e)}")
                 raise e
 
+def sanitize_retailer_url(source: str, url: str, item_name: str) -> str:
+    """
+    Sanitizes retailer URLs to ensure they never 404.
+    If an Amazon, Flipkart, IKEA, or Meesho URL is broken, missing, or contains placeholder IDs,
+    it converts it to the official live product search URL.
+    """
+    from urllib.parse import quote_plus
+    clean_name = item_name.strip() if item_name else "product"
+    q = quote_plus(clean_name)
+    
+    is_placeholder = (
+        not url or
+        any(placeholder in url for placeholder in ("B084Z6T721", "itm5a3b97b102808", "example.com", "YOUR_ASIN"))
+    )
+    
+    if is_placeholder:
+        if source == "amazon":
+            return f"https://www.amazon.in/s?k={q}"
+        elif source == "flipkart":
+            return f"https://www.flipkart.com/search?q={q}"
+        elif source == "ikea":
+            return f"https://www.ikea.com/in/en/search/?q={q}"
+        elif source == "meesho":
+            return f"https://www.meesho.com/search?q={q}"
+        elif source == "myntra":
+            return f"https://www.myntra.com/{q}"
+        elif source == "croma":
+            return f"https://www.croma.com/searchB?q={q}"
+        elif source == "reliance":
+            return f"https://www.reliancedigital.in/search?q={q}"
+            
+    return url
+
 def _call_gemini_api(
     item_name: str, 
     manual_link: Optional[str] = None,
@@ -653,7 +687,7 @@ def _call_gemini_api(
         "1. Strictly prioritize trusted Indian retail domains: Amazon India (amazon.in), Flipkart (flipkart.com), IKEA India (ikea.com/in/en), Meesho (meesho.com), Myntra (myntra.com), Croma (croma.com), Reliance Digital (reliancedigital.in), and official brand stores. Do NOT return amazon.com or US links.\n"
         "2. All product prices must be in Indian Rupees (INR). If you only find USD/foreign currency prices, convert them to INR (1 USD = 83 INR).\n"
         "3. Only include an 'official' source if you can locate the brand's actual domain (e.g. apple.com, sony.co.in, ikea.com). Do NOT return reseller domains as 'official'.\n"
-        "4. Direct Product Pages Only: Links must point directly to a product page. Do NOT return search result pages.\n"
+        "4. Live URL Reliability: Return actual URLs found via search grounding. If you do not have an exact direct product page URL, use the store search URL format (e.g. 'https://www.amazon.in/s?k=<product+name>' or 'https://www.flipkart.com/search?q=<product+name>'). NEVER invent or hallucinate fake ASINs or product IDs (like B084Z6T721) as they lead to 404 Page Not Found errors.\n"
         "5. If a direct link was provided, prioritize the scraped details from that link.\n\n"
         "IMPORTANT: Return a SINGLE, STRICT JSON object with this exact structure:\n"
         "{\n"

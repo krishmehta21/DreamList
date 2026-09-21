@@ -74,8 +74,8 @@ export default function RootLayout() {
   }, []);
 
   return (
-    <GestureHandlerRootView style={{ flex: 1 }}>
-      <SafeAreaProvider>
+    <GestureHandlerRootView style={{ flex: 1, backgroundColor: '#F0F4FC' }}>
+      <SafeAreaProvider style={{ flex: 1, backgroundColor: '#F0F4FC' }}>
         <AuthProvider>
           <StatusBar style="dark" />
           <AuthGate>
@@ -85,6 +85,7 @@ export default function RootLayout() {
                   headerShown: false,
                   contentStyle: { backgroundColor: '#F0F4FC' },
                   animation: 'slide_from_right',
+                  animationDuration: 220,
                 }}
               >
                 <Stack.Screen
@@ -106,22 +107,25 @@ export default function RootLayout() {
                   options={{
                     presentation: 'card',
                     animation: 'slide_from_right',
+                    animationDuration: 220,
                     contentStyle: { backgroundColor: '#F0F4FC' },
                   }}
                 />
                 <Stack.Screen
                   name="add"
                   options={{
-                    presentation: 'modal',
+                    presentation: 'card',
                     animation: 'slide_from_bottom',
+                    animationDuration: 220,
                     contentStyle: { backgroundColor: '#F0F4FC' },
                   }}
                 />
                 <Stack.Screen
                   name="expenses/transaction"
                   options={{
-                    presentation: 'modal',
+                    presentation: 'card',
                     animation: 'slide_from_bottom',
+                    animationDuration: 220,
                     contentStyle: { backgroundColor: '#F0F4FC' },
                   }}
                 />
@@ -130,6 +134,7 @@ export default function RootLayout() {
                   options={{
                     presentation: 'card',
                     animation: 'slide_from_right',
+                    animationDuration: 220,
                     contentStyle: { backgroundColor: '#F0F4FC' },
                   }}
                 />
